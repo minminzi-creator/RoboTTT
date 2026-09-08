@@ -23,3 +23,16 @@ __all__ = [
     "Gr00tN1d7SequenceDataset",
     "build_gr00t_n1d7_sft_dataloader",
 ]
+
+# Pure GR00T N1.7 single-step SFT baseline.
+from rlinf.data.datasets.gr00t_n1d7.sft_dataset import (
+    Gr00tN1d7SingleStepCollator,
+    Gr00tN1d7SingleStepDataset,
+    build_gr00t_n1d7_single_step_sft_dataloader,
+)
+
+__all__ += [
+    "Gr00tN1d7SingleStepCollator",
+    "Gr00tN1d7SingleStepDataset",
+    "build_gr00t_n1d7_single_step_sft_dataloader",
+]

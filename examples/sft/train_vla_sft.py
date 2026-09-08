@@ -30,16 +30,33 @@ mp.set_start_method("spawn", force=True)
 
 def _launch_sft_worker(cfg, cluster, actor_placement):
     model_type = str(cfg.actor.model.model_type)
-    if model_type == "gr00t_n1d7":
+    use_ttt = bool(
+        OmegaConf.select(
+            cfg,
+            "actor.model.rl_head_config.use_ttt",
+            default=False,
+        )
+    )
+
+    if model_type == "gr00t_n1d7" and use_ttt:
         from rlinf.workers.sft.fsdp_robottt_sft_worker import FSDPRoboTTTSftWorker
 
         worker_cls = FSDPRoboTTTSftWorker
     else:
         worker_cls = FSDPVlaSftWorker
-    return worker_cls.create_group(cfg).launch(
-        cluster, name=cfg.actor.group_name, placement_strategy=actor_placement
+
+    logging.info(
+        "Launching SFT worker: model_type=%s, use_ttt=%s, worker=%s",
+        model_type,
+        use_ttt,
+        worker_cls.__name__,
     )
 
+    return worker_cls.create_group(cfg).launch(
+        cluster,
+        name=cfg.actor.group_name,
+        placement_strategy=actor_placement,
+    )
 
 @hydra.main(
     version_base="1.1", config_path="config", config_name="maniskill_ppo_openvlaoft"

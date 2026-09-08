@@ -72,10 +72,10 @@ class FSDPVlaSftWorker(FSDPSftWorker):
             )
         elif model_type == SupportedModel.GR00T_N1D7:
             from rlinf.data.datasets.gr00t_n1d7 import (
-                build_gr00t_n1d7_sft_dataloader,
+                build_gr00t_n1d7_single_step_sft_dataloader,
             )
 
-            return build_gr00t_n1d7_sft_dataloader(
+            return build_gr00t_n1d7_single_step_sft_dataloader(
                 self.cfg, self._world_size, self._rank, data_paths, eval_dataset
             )
         else:
