@@ -1,0 +1,98 @@
+defaults:
+  - model/gr00t_n1d7@actor.model
+  - hybrid_engines/fsdp@actor.fsdp_config
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor: all
+
+runner:
+  task_type: sft
+  logger:
+    log_path: "../results"
+    project_name: rlinf
+    experiment_name: "robocasa_bowlandcup_sft_gr00t_n1d7_pure_sft_50k"
+    logger_backends: ["tensorboard"]
+
+  max_epochs: -1
+
+  # Smoke test only. Change to 50000 after the whole pipeline passes.
+  max_steps: 50000
+
+  val_check_interval: -1
+  save_interval: 1000
+  log_interval: 1
+  resume_dir: null
+
+data:
+  train_data_paths: /mnt/public/chenzm/robottt/datasets/robocasa365/BowlAndCup/lerobot/lerobot
+
+  num_workers: 4
+  prefetch_factor: 2
+  video_backend: torchcodec
+
+  # RoboCasa compatibility only.
+  # These are NOT RoboTTT sequence settings.
+  modality_config_path: examples/sft/config/robocasa365_panda_omron_config.py
+  modality_config_name: robocasa365_panda_omron_config
+
+actor:
+  group_name: "ActorGroup"
+  training_backend: "fsdp"
+
+  micro_batch_size: 1
+  global_batch_size: 8
+  seed: 42
+
+  model:
+    model_type: "gr00t_n1d7"
+    precision: bf16
+
+    # Same starting checkpoint as the RoboTTT experiment.
+    model_path: /mnt/public/guozhen/dev_robottt/GR00T-N1.7-realworld-pni
+    backbone_model_path: /mnt/public/guozhen/models/Cosmos-Reason2-2B
+
+    embodiment_tag: new_embodiment
+
+    # RoboCasa BowlAndCup:
+    # H = 8, action_dim = 12, 3 cameras.
+    action_dim: 12
+    valid_action_dim: 12
+    image_nums: 3
+
+    add_value_head: False
+    num_action_chunks: 8
+    denoising_steps: 4
+
+  # Keep optimizer settings identical to RoboTTT control.
+  optim:
+    lr: 5.0e-5
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    weight_decay: 1.0e-5
+    clip_grad: 1.0
+    lr_scheduler: cosine
+    lr_warmup_steps: 200
+
+    # Keep the real-training scheduler horizon even for the 2-step smoke test.
+    total_training_steps: 50000
+
+  fsdp_config:
+    strategy: "fsdp"
+    sharding_strategy: "full_shard"
+    use_orig_params: True
+    gradient_checkpointing: True
+    mixed_precision:
+      param_dtype: bf16
+      reduce_dtype: fp32
+      buffer_dtype: fp32
