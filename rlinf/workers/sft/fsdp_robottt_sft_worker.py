@@ -99,6 +99,122 @@ class FSDPRoboTTTSftWorker(FSDPVlaSftWorker):
     the paper's :math:`(1/T)\\sum_t \\ell_t`.
     """
 
+    def init_worker(self):
+        """Initialize FSDP training and audit TTT-only parameter freezing."""
+        super().init_worker()
+
+        ttt_cfg = self.cfg.actor.model.get("rl_head_config", {}).get("ttt", {})
+        if not bool(ttt_cfg.get("train_ttt_only", False)):
+            return
+
+        trainable_named = [
+            (name, param)
+            for name, param in self.model.named_parameters()
+            if param.requires_grad
+        ]
+
+        trainable_ids = {id(param) for _, param in trainable_named}
+        optimizer_params = [
+            param
+            for group in self.optimizer.param_groups
+            for param in group["params"]
+        ]
+        optimizer_ids = {id(param) for param in optimizer_params}
+
+        allowed_keywords = (
+            "ttt_layer",
+            "ttt_gate",
+            "register_token_bank",
+        )
+
+        unexpected = [
+            name
+            for name, _ in trainable_named
+            if not any(key in name for key in allowed_keywords)
+        ]
+
+        missing_from_optimizer = [
+            name
+            for name, param in trainable_named
+            if id(param) not in optimizer_ids
+        ]
+
+        optimizer_extra_ids = optimizer_ids - trainable_ids
+
+        trainable_numel = sum(param.numel() for _, param in trainable_named)
+        optimizer_numel = sum(param.numel() for param in optimizer_params)
+
+        ttt_layer_numel = sum(
+            param.numel()
+            for name, param in trainable_named
+            if "ttt_layer" in name
+        )
+        gate_numel = sum(
+            param.numel()
+            for name, param in trainable_named
+            if "ttt_gate" in name
+        )
+        register_numel = sum(
+            param.numel()
+            for name, param in trainable_named
+            if "register_token_bank" in name
+        )
+
+        self._logger.info(
+            "\n"
+            "================ TTT-ONLY AUDIT ================\n"
+            f"trainable tensors       : {len(trainable_named)}\n"
+            f"trainable params        : {trainable_numel:,}\n"
+            f"optimizer tensors       : {len(optimizer_params)}\n"
+            f"optimizer params        : {optimizer_numel:,}\n"
+            f"optimizer == trainable  : {trainable_ids == optimizer_ids}\n"
+            "\n"
+            f"TTT layer params        : {ttt_layer_numel:,}\n"
+            f"TTT gate params         : {gate_numel:,}\n"
+            f"register params         : {register_numel:,}\n"
+            "\n"
+            f"unexpected tensors      : {len(unexpected)}\n"
+            f"missing from optimizer  : {len(missing_from_optimizer)}\n"
+            f"optimizer extra tensors : {len(optimizer_extra_ids)}\n"
+            "================================================"
+        )
+
+        # Print a small sample rather than hundreds of TTT tensors.
+        for name, param in trainable_named[:30]:
+            self._logger.info(
+                "[TTT-ONLY][TRAINABLE] %s shape=%s numel=%d",
+                name,
+                tuple(param.shape),
+                param.numel(),
+            )
+
+        if unexpected:
+            for name in unexpected[:50]:
+                self._logger.error("[TTT-ONLY][UNEXPECTED] %s", name)
+
+        if missing_from_optimizer:
+            for name in missing_from_optimizer[:50]:
+                self._logger.error(
+                    "[TTT-ONLY][MISSING_FROM_OPTIMIZER] %s", name
+                )
+
+        assert not unexpected, (
+            "TTT-only audit failed: non-TTT parameters are trainable: "
+            f"{unexpected[:20]}"
+        )
+        assert not missing_from_optimizer, (
+            "TTT-only audit failed: trainable parameters missing from optimizer: "
+            f"{missing_from_optimizer[:20]}"
+        )
+        assert not optimizer_extra_ids, (
+            "TTT-only audit failed: optimizer contains parameters that are not "
+            "requires_grad=True"
+        )
+        assert trainable_ids == optimizer_ids, (
+            "TTT-only audit failed: optimizer parameter set does not exactly "
+            "match trainable parameter set"
+        )
+
     def _tbptt_segment_length(self, num_timesteps: int) -> int:
         configured = int(self.cfg.actor.model.get("tbptt_segment_length", 0) or 0)
         if configured <= 0:
@@ -172,3 +288,46 @@ class FSDPRoboTTTSftWorker(FSDPVlaSftWorker):
             per_segment, segment_losses, bounds, num_timesteps
         )
         return last_loss, metrics
+
+
+# ============================================================
+# BEGIN ROBOTT_V7B_WORKER_TRACE
+# ============================================================
+
+import os as _robottt_v7b_worker_os
+
+
+if _robottt_v7b_worker_os.environ.get(
+    "ROBOTT_V7B_TRACE", "0"
+) == "1":
+
+    _robottt_v7b_original_get_output = (
+        FSDPRoboTTTSftWorker.get_train_model_output
+    )
+
+    def _robottt_v7b_get_train_model_output(
+        self,
+        batch,
+    ):
+        # Share optimizer/global step with ttt.py.
+        from rlinf.models.embodiment.gr00t.gr00t_n1d7 import (
+            ttt as _robottt_v7b_ttt_module,
+        )
+
+        _robottt_v7b_ttt_module._robottt_v7b_current_step = int(
+            self.global_step
+        )
+
+        return _robottt_v7b_original_get_output(
+            self,
+            batch,
+        )
+
+    FSDPRoboTTTSftWorker.get_train_model_output = (
+        _robottt_v7b_get_train_model_output
+    )
+
+
+# ============================================================
+# END ROBOTT_V7B_WORKER_TRACE
+# ============================================================

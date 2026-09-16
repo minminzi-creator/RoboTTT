@@ -891,3 +891,302 @@ class TTTTimeMixer(nn.Module):
         residual = torch.zeros_like(per_step)
         residual[:, :, token_mask] = gated
         return (per_step + residual).reshape(flat_batch, tokens_per_step, dim)
+
+
+# ============================================================
+# BEGIN ROBOTT_V7B_TRACE
+#
+# Validate real outer gradients on unsharded TTT parameters.
+# ============================================================
+
+import os as _robottt_v7b_os
+import math as _robottt_v7b_math
+
+
+_robottt_v7b_current_step = 0
+
+
+if _robottt_v7b_os.environ.get(
+    "ROBOTT_V7B_TRACE", "0"
+) == "1":
+
+    _robottt_v7b_original_apply_layer = (
+        TTTTimeMixer.apply_layer
+    )
+
+    # Full parameter snapshot from first forward of each step.
+    _robottt_v7b_snapshots = {}
+
+    # Avoid repeatedly attaching hooks to the same FSDP view.
+    _robottt_v7b_hooked = set()
+
+    _robottt_v7b_grad_events = {}
+
+
+    def _robottt_v7b_norm(x):
+        x = x.detach().float()
+
+        if x.numel() == 0:
+            return 0.0, 0.0, True
+
+        return (
+            float(
+                x.double()
+                .square()
+                .sum()
+                .sqrt()
+                .item()
+            ),
+            float(
+                x.abs().amax().item()
+            ),
+            bool(
+                torch.isfinite(x).all()
+            ),
+        )
+
+
+    def _robottt_v7b_apply_layer(
+        self,
+        layer_index,
+        hidden_states,
+        context,
+        layer=None,
+        gate=None,
+    ):
+        # Only layer 0 is needed.
+        if layer_index != 0:
+            return _robottt_v7b_original_apply_layer(
+                self,
+                layer_index,
+                hidden_states,
+                context,
+                layer=layer,
+                gate=gate,
+            )
+
+        dist = torch.distributed
+
+        if (
+            not dist.is_available()
+            or not dist.is_initialized()
+        ):
+            return _robottt_v7b_original_apply_layer(
+                self,
+                layer_index,
+                hidden_states,
+                context,
+                layer=layer,
+                gate=gate,
+            )
+
+        rank = dist.get_rank()
+
+        ttt_layer = (
+            layer
+            if layer is not None
+            else self.layers[layer_index]
+        )
+
+        ttt_gate = (
+            gate
+            if gate is not None
+            else self.gates[layer_index]
+        )
+
+        step = int(
+            globals().get(
+                "_robottt_v7b_current_step",
+                0,
+            )
+        )
+
+        targets = {
+            "gate":
+                ttt_gate,
+
+            "o_proj":
+                ttt_layer.o_proj.weight,
+
+            "w1_init":
+                ttt_layer.w1_init,
+
+            "q_proj":
+                ttt_layer.q_proj.weight,
+
+            "ttt_lr":
+                ttt_layer.ttt_lr_proj.weight,
+        }
+
+        # ====================================================
+        # A. Parameter snapshot
+        #
+        # This happens while the FSDP block is unsharded.
+        #
+        # First forward of step s:
+        #   snapshot P_s
+        #
+        # First forward of step s+1:
+        #   compare P_{s+1} - P_s
+        #
+        # This is the optimizer update produced by step s.
+        # ====================================================
+
+        if (
+            rank == 0
+            and step not in _robottt_v7b_snapshots
+        ):
+
+            current_snapshot = {}
+
+            for name, param in targets.items():
+
+                current = (
+                    param.detach()
+                    .float()
+                    .cpu()
+                    .clone()
+                )
+
+                current_snapshot[name] = current
+
+                if (
+                    step - 1
+                    in _robottt_v7b_snapshots
+                    and name
+                    in _robottt_v7b_snapshots[
+                        step - 1
+                    ]
+                ):
+
+                    previous = (
+                        _robottt_v7b_snapshots[
+                            step - 1
+                        ][name]
+                    )
+
+                    delta = current - previous
+
+                    delta_norm, delta_max, finite = (
+                        _robottt_v7b_norm(delta)
+                    )
+
+                    print(
+                        "[ROBOTT_V7B_UPDATE] "
+                        f"from_step={step - 1} "
+                        f"to_step={step} "
+                        f"name={name} "
+                        f"delta_norm={delta_norm:.9e} "
+                        f"delta_max={delta_max:.9e} "
+                        f"finite={finite}",
+                        flush=True,
+                    )
+
+            _robottt_v7b_snapshots[
+                step
+            ] = current_snapshot
+
+        # ====================================================
+        # B. Gradient hooks
+        #
+        # With reentrant gradient checkpointing:
+        #
+        # initial checkpoint forward:
+        #     grad_enabled=False
+        #
+        # backward recomputation:
+        #     grad_enabled=True
+        #
+        # Therefore attach hooks on the grad-enabled FSDP
+        # parameter views that actually participate in backward.
+        # ====================================================
+
+        if rank == 0 and torch.is_grad_enabled():
+
+            for name, param in targets.items():
+
+                if not param.requires_grad:
+                    continue
+
+                hook_key = (
+                    step,
+                    name,
+                    id(param),
+                )
+
+                if hook_key in _robottt_v7b_hooked:
+                    continue
+
+                _robottt_v7b_hooked.add(
+                    hook_key
+                )
+
+                def _make_hook(
+                    target_name,
+                    target_step,
+                ):
+                    def _hook(grad):
+
+                        norm, max_abs, finite = (
+                            _robottt_v7b_norm(
+                                grad
+                            )
+                        )
+
+                        event_key = (
+                            target_step,
+                            target_name,
+                        )
+
+                        event_idx = (
+                            _robottt_v7b_grad_events
+                            .get(
+                                event_key,
+                                0,
+                            )
+                        )
+
+                        _robottt_v7b_grad_events[
+                            event_key
+                        ] = event_idx + 1
+
+                        print(
+                            "[ROBOTT_V7B_GRAD] "
+                            f"step={target_step} "
+                            f"name={target_name} "
+                            f"event={event_idx} "
+                            f"grad_norm={norm:.9e} "
+                            f"grad_max={max_abs:.9e} "
+                            f"finite={finite}",
+                            flush=True,
+                        )
+
+                        return grad
+
+                    return _hook
+
+                param.register_hook(
+                    _make_hook(
+                        name,
+                        step,
+                    )
+                )
+
+        return _robottt_v7b_original_apply_layer(
+            self,
+            layer_index,
+            hidden_states,
+            context,
+            layer=layer,
+            gate=gate,
+        )
+
+
+    TTTTimeMixer.apply_layer = (
+        _robottt_v7b_apply_layer
+    )
+
+
+# ============================================================
+# END ROBOTT_V7B_TRACE
+# ============================================================

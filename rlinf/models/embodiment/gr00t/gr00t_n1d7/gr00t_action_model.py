@@ -912,7 +912,7 @@ class FlowMatchingActionHeadForRLActionPrediction(Gr00tN1d7ActionHead):
         log_probs = torch.stack(log_probs, dim=1)[
             :, :, : self.action_chunk, : self.env_action_dim
         ]
-        if compute_values:
+        if compute_values and hasattr(self, "value_head"):
             values = self.get_value(vl_embs, state_features)
             values = values[:, None]
         else:
@@ -994,7 +994,7 @@ class FlowMatchingActionHeadForRLActionPrediction(Gr00tN1d7ActionHead):
             chains_log_probs.append(log_probs)
 
         chains_log_probs = torch.stack(chains_log_probs, dim=1)
-        if compute_values:
+        if compute_values and hasattr(self, "value_head"):
             chains_values = self.get_value(vl_embs, state_features)
             chains_values = chains_values[:, None]
         else:
@@ -1231,6 +1231,19 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         self.action_convert_fn = ACTION_CONVERSION_N1D7[obs_converter_type]
         exp_cfg_path = self.model_path / "experiment_cfg"
         self._load_metadata(exp_cfg_path)
+        # The checkpoint may contain processor metadata for a different
+        # NEW_EMBODIMENT dataset.  Honor explicit runtime embodiment
+        # dimensions after metadata inference but before validating action_dim.
+        configured_valid_action_dim = getattr(
+            config, "valid_action_dim", None
+        )
+        if configured_valid_action_dim is not None:
+            self.valid_action_dim = int(configured_valid_action_dim)
+
+        configured_image_nums = getattr(config, "image_nums", None)
+        if configured_image_nums is not None:
+            self.image_nums = int(configured_image_nums)
+
         self.action_dim = _resolve_env_action_dim(
             getattr(config, "action_dim", self.valid_action_dim),
             self.valid_action_dim,
@@ -1417,9 +1430,148 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         del kwargs
         observations, obs_copy, is_batch = self._prepare_rollout_observation(env_obs)
         ttt_context = self._rollout_ttt_context(stage_id=stage_id, dones=dones)
+
+        # ------------------------------------------------------------
+        # DEBUG: measure inference-time RoboTTT fast-weight update.
+        # Enabled only with ROBOTT_DEBUG_TTT=1.
+        # ------------------------------------------------------------
+        import os
+
+        _debug_ttt = os.environ.get("ROBOTT_DEBUG_TTT", "0") == "1"
+        _debug_limit = int(os.environ.get("ROBOTT_DEBUG_TTT_STEPS", "20"))
+
+        if not hasattr(self, "_robottt_debug_step"):
+            self._robottt_debug_step = 0
+
+        def _collect_state_tensors(obj, prefix=""):
+            out = {}
+
+            if torch.is_tensor(obj):
+                out[prefix or "tensor"] = obj
+                return out
+
+            if obj is None:
+                return out
+
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    out.update(
+                        _collect_state_tensors(
+                            v,
+                            f"{prefix}.{k}" if prefix else str(k),
+                        )
+                    )
+                return out
+
+            if isinstance(obj, (list, tuple)):
+                for i, v in enumerate(obj):
+                    out.update(
+                        _collect_state_tensors(
+                            v,
+                            f"{prefix}.{i}" if prefix else str(i),
+                        )
+                    )
+                return out
+
+            if hasattr(obj, "__dict__"):
+                for k, v in vars(obj).items():
+                    out.update(
+                        _collect_state_tensors(
+                            v,
+                            f"{prefix}.{k}" if prefix else str(k),
+                        )
+                    )
+
+            return out
+
+        _before = {}
+
+        if (
+            _debug_ttt
+            and self._robottt_debug_step < _debug_limit
+            and ttt_context is not None
+            and ttt_context.states is not None
+            and len(ttt_context.states) > 0
+            and ttt_context.states[0] is not None
+        ):
+            _tmp = _collect_state_tensors(ttt_context.states[0])
+
+            _before = {
+                k: v.detach().float().clone()
+                for k, v in _tmp.items()
+                if torch.is_floating_point(v)
+            }
+
         normalized_action, result = self._predict_normalized_action(
             obs_copy, mode, ttt_context=ttt_context
         )
+
+        if (
+            _debug_ttt
+            and self._robottt_debug_step < _debug_limit
+            and ttt_context is not None
+            and ttt_context.states is not None
+            and len(ttt_context.states) > 0
+            and ttt_context.states[0] is not None
+        ):
+            _after_raw = _collect_state_tensors(ttt_context.states[0])
+
+            _after = {
+                k: v.detach().float()
+                for k, v in _after_raw.items()
+                if torch.is_floating_point(v)
+            }
+
+            _norm2 = 0.0
+            for v in _after.values():
+                _norm2 += float((v * v).sum().item())
+
+            _after_norm = _norm2 ** 0.5
+
+            if _before:
+                _diff2 = 0.0
+                _base2 = 0.0
+                _common = 0
+
+                for k, x0 in _before.items():
+                    if k not in _after:
+                        continue
+
+                    x1 = _after[k]
+
+                    if x0.shape != x1.shape:
+                        continue
+
+                    _diff2 += float(((x1 - x0) ** 2).sum().item())
+                    _base2 += float((x0 ** 2).sum().item())
+                    _common += 1
+
+                _abs_delta = _diff2 ** 0.5
+                _rel_delta = _abs_delta / max(_base2 ** 0.5, 1e-12)
+
+                print(
+                    f"[TTT FAST DEBUG] "
+                    f"step={self._robottt_debug_step} "
+                    f"layer=0 "
+                    f"state_norm={_after_norm:.6e} "
+                    f"abs_delta={_abs_delta:.6e} "
+                    f"rel_delta={_rel_delta:.6e} "
+                    f"tensors={_common}",
+                    flush=True,
+                )
+
+            else:
+                print(
+                    f"[TTT FAST DEBUG] "
+                    f"step={self._robottt_debug_step} "
+                    f"layer=0 "
+                    f"state_norm={_after_norm:.6e} "
+                    f"initial_state=True",
+                    flush=True,
+                )
+
+        self._robottt_debug_step += 1
+
         if ttt_context is not None:
             self._ttt_rollout_states[int(stage_id)] = ttt_context.states
         unnormalized_action = self._get_unnormalized_action(

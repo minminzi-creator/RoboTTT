@@ -52,8 +52,8 @@ actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
   # Paper post-train: per-device 1, 8 GPU → global 8.
-  micro_batch_size: 2
-  global_batch_size: 16
+  micro_batch_size: 1
+  global_batch_size: 8
   seed: 42
 
   model:

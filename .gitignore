@@ -22,3 +22,37 @@ rlinf/envs/maniskill/assets
 PKG-INFO
 *.egg-info/
 .claude/settings.json
+# ===== RoboTTT local artifacts =====
+logs/
+outputs/
+checkpoints/
+wandb/
+ray_results/
+
+# Evaluation outputs
+eval_*/
+open_loop_*/
+*.mp4
+# Model weights
+*.pt
+*.pth
+*.safetensors
+*.ckpt
+# Datasets / downloaded models
+datasets/
+models/
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+# OS / editor
+.DS_Store
+.vscode/
+.cursor/
+
+# Local backup files
+*.bak
+*.bak_*
+*.bak_before_*

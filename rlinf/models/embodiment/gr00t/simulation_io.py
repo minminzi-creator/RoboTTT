@@ -208,7 +208,106 @@ def convert_to_isaaclab_stack_cube_action(
     return action_array
 
 
+
+
+def _robocasa365_to_numpy(value):
+    if torch.is_tensor(value):
+        return value.detach().cpu().numpy()
+    return np.asarray(value)
+
+
+def convert_robocasa365_obs_to_gr00t_format(env_obs):
+    """Convert RLinf RoboCasa365 observation to the SFT NEW_EMBODIMENT format.
+
+    env state layout:
+      base_pos(3)
+      base_quat(4)
+      base_to_eef_pos(3)
+      base_to_eef_quat(4)
+      gripper_qpos(2)
+    total = 16
+    """
+    main = _robocasa365_to_numpy(env_obs["main_images"])
+    wrist = _robocasa365_to_numpy(env_obs["wrist_images"])
+    extra = _robocasa365_to_numpy(env_obs["extra_view_images"])
+    state = _robocasa365_to_numpy(env_obs["states"])
+
+    if state.ndim != 2 or state.shape[-1] != 16:
+        raise ValueError(
+            f"RoboCasa365 GR00T expects states [B,16], got {state.shape}"
+        )
+
+    if extra.ndim != 5 or extra.shape[1] < 1:
+        raise ValueError(
+            "RoboCasa365 GR00T expects extra_view_images "
+            f"[B,N,H,W,C] with N>=1, got {extra.shape}"
+        )
+
+    right = extra[:, 0]
+
+    # [B,H,W,C] -> [B,T=1,H,W,C]
+    groot_obs = {
+        "video.robot0_agentview_left": main[:, None],
+        "video.robot0_agentview_right": right[:, None],
+        "video.robot0_eye_in_hand": wrist[:, None],
+
+        "state.base_position": state[:, None, 0:3],
+        "state.base_rotation": state[:, None, 3:7],
+        "state.end_effector_position_relative": state[:, None, 7:10],
+        "state.end_effector_rotation_relative": state[:, None, 10:14],
+        "state.gripper_qpos": state[:, None, 14:16],
+
+        "annotation.human.task_description": env_obs["task_descriptions"],
+    }
+
+    return groot_obs
+
+
+def convert_to_robocasa365_action_n1d7(
+    action_chunk: dict[str, np.ndarray],
+    chunk_size: int = 8,
+) -> np.ndarray:
+    """Convert SFT grouped 12D action to native PandaOmron RoboCasa action.
+
+    SFT / processor order:
+      base_motion(4), control_mode(1),
+      ee_position(3), ee_rotation(3), gripper(1)
+
+    RoboCasa native order:
+      ee_position(3), ee_rotation(3), gripper(1),
+      base_motion(4), control_mode(1)
+    """
+
+    base = np.asarray(action_chunk["base_motion"])[:, :chunk_size]
+    mode = np.asarray(action_chunk["control_mode"])[:, :chunk_size]
+    pos = np.asarray(action_chunk["end_effector_position"])[:, :chunk_size]
+    rot = np.asarray(action_chunk["end_effector_rotation"])[:, :chunk_size]
+    grip = np.asarray(action_chunk["gripper_close"])[:, :chunk_size]
+
+    action = np.concatenate(
+        [
+            pos,
+            rot,
+            grip,
+            base,
+            mode,
+        ],
+        axis=-1,
+    ).astype(np.float32, copy=False)
+
+    if action.shape[-1] != 12:
+        raise ValueError(
+            f"Expected 12-dim RoboCasa365 action, got {action.shape}"
+        )
+
+    # Native RoboCasa gripper expects {-1,+1}
+    action[..., 6] = np.where(action[..., 6] >= 0.0, 1.0, -1.0)
+
+    return action
+
+
 OBS_CONVERSION = {
+    "robocasa365": convert_robocasa365_obs_to_gr00t_format,
     "maniskill": convert_maniskill_obs_to_gr00t_format,
     "libero": convert_libero_obs_to_gr00t_format,
     "isaaclab_stack_cube": convert_libero_obs_to_gr00t_format,
@@ -227,6 +326,7 @@ ACTION_CONVERSION_N1D6 = {
 }
 
 ACTION_CONVERSION_N1D7 = {
+    "robocasa365": convert_to_robocasa365_action_n1d7,
     "libero": convert_to_libero_action_n1d7,
     "maniskill": convert_to_maniskill_action,
     "isaaclab_stack_cube": convert_to_isaaclab_stack_cube_action,

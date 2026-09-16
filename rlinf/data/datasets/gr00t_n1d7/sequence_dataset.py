@@ -23,6 +23,7 @@ and the collator flattens them to ``[B * T, ...]`` in batch-major order.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -68,6 +69,57 @@ def _resolve_backbone_model_path(backbone_model_path: Optional[str]) -> Optional
         raise FileNotFoundError(f"Backbone model path does not exist: {resolved}")
     return resolved
 
+
+
+def _load_external_modality_config(
+    config_path: str,
+    config_name: Optional[str] = None,
+):
+    """Load a ModalityConfig dictionary from an external Python file."""
+    path = Path(config_path).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Modality config file does not exist: {path}")
+
+    spec = importlib.util.spec_from_file_location(
+        f"_rlinf_modality_{path.stem}",
+        str(path),
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot import modality config from {path}")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    if config_name is not None:
+        if not hasattr(module, config_name):
+            raise AttributeError(
+                f"{path} has no modality config named {config_name}"
+            )
+        cfg = getattr(module, config_name)
+    else:
+        candidates = []
+        for name, value in vars(module).items():
+            if (
+                isinstance(value, dict)
+                and all(k in value for k in ("video", "state", "action", "language"))
+            ):
+                candidates.append((name, value))
+
+        if len(candidates) != 1:
+            raise ValueError(
+                f"Expected exactly one modality config in {path}, "
+                f"found {[name for name, _ in candidates]}. "
+                "Set robottt.modality_config_name explicitly."
+            )
+
+        config_name, cfg = candidates[0]
+
+    logger.info(
+        "Loaded external modality config %s from %s",
+        config_name,
+        path,
+    )
+    return cfg
 
 def _load_processor(model_path: str, backbone_model_path: Optional[str] = None):
     from gr00t.model.gr00t_n1d7.processing_gr00t_n1d7 import Gr00tN1d7Processor
@@ -355,6 +407,26 @@ def build_gr00t_n1d7_sft_dataloader(
     )
     embodiment_tag = _resolve_embodiment_tag(str(model_cfg.embodiment_tag))
     robottt_cfg = data_cfg.get("robottt", {}) or {}
+
+    modality_config_path = robottt_cfg.get("modality_config_path", None)
+    if modality_config_path:
+        custom_modality_cfg = _load_external_modality_config(
+            str(modality_config_path),
+            config_name=robottt_cfg.get("modality_config_name", None),
+        )
+        tag_value = embodiment_tag.value
+
+        # Processor and StateActionProcessor keep separate copies.
+        processor.modality_configs[tag_value] = custom_modality_cfg
+        processor.state_action_processor.modality_configs[tag_value] = (
+            custom_modality_cfg
+        )
+
+        logger.info(
+            "Overrode processor modality config for %s from %s",
+            tag_value,
+            modality_config_path,
+        )
     num_timesteps = int(robottt_cfg.get("num_timesteps", data_cfg.get("num_timesteps", 16)))
     dataset = Gr00tN1d7SequenceDataset(
         dataset_path=str(dataset_path),
@@ -367,6 +439,18 @@ def build_gr00t_n1d7_sft_dataloader(
         human_video_timesteps=int(robottt_cfg.get("human_video_timesteps", 0) or 0),
         samples_per_epoch=data_cfg.get("samples_per_epoch", None),
     )
+
+    if modality_config_path:
+        dataset_stats = dataset.loader.get_dataset_statistics()
+        processor.set_statistics(
+            {embodiment_tag.value: dataset_stats},
+            override=True,
+        )
+        logger.info(
+            "Loaded dataset statistics for %s from %s",
+            embodiment_tag.value,
+            dataset_path,
+        )
     sampler = DistributedSampler(
         dataset,
         num_replicas=world_size,

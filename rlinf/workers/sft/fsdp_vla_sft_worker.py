@@ -111,6 +111,180 @@ class FSDPVlaSftWorker(FSDPSftWorker):
     def save_checkpoint(self, save_path: str, step: int = 0) -> None:
         super().save_checkpoint(save_path, step)
 
+        # RoboTTT inference bundle:
+        # full_weights.pt already stores learned W0 and all trained model params.
+        # Here we additionally package the RoboCasa interface metadata required
+        # by the inference side.
+        if self._rank == 0:
+            import json
+            import shutil
+
+            inference_dir = os.path.join(save_path, "inference_meta")
+            os.makedirs(inference_dir, exist_ok=True)
+
+            dataset_meta_dir = (
+                "/mnt/public/chenzm/robottt/datasets/"
+                "robocasa365/BowlAndCup/lerobot/lerobot/meta"
+            )
+
+            modality_config_path = (
+                "/mnt/public/chenzm/robottt/workspace/RLinf-robottt/"
+                "examples/sft/config/robocasa365_panda_omron_config.py"
+            )
+
+            train_config_path = (
+                "/mnt/public/chenzm/robottt/workspace/RLinf-robottt/"
+                "examples/sft/config/"
+                "robocasa_bowlandcup_sft_gr00t_n1d7_robottt_50k.yaml"
+            )
+
+            files_to_copy = {
+                os.path.join(dataset_meta_dir, "modality.json"):
+                    "modality.json",
+                os.path.join(dataset_meta_dir, "embodiment.json"):
+                    "embodiment.json",
+                os.path.join(dataset_meta_dir, "stats.json"):
+                    "stats.json",
+                modality_config_path:
+                    "robocasa365_panda_omron_config.py",
+                train_config_path:
+                    "train_config.yaml",
+            }
+
+            copied = []
+            missing = []
+
+            for src, dst_name in files_to_copy.items():
+                if os.path.isfile(src):
+                    shutil.copy2(src, os.path.join(inference_dir, dst_name))
+                    copied.append(dst_name)
+                else:
+                    missing.append(src)
+
+            inference_config = {
+                "checkpoint_step": int(step),
+
+                "model_weights":
+                    "../model_state_dict/full_weights.pt",
+
+                "embodiment_tag": "new_embodiment",
+
+                "state_dim": 16,
+                "action_dim": 12,
+                "valid_action_dim": 12,
+                "image_nums": 3,
+
+                "num_action_chunks": 8,
+                "model_action_horizon": 40,
+                "model_max_action_dim": 132,
+
+                "robottt": {
+                    "enabled": True,
+                    "fast_model": "mlp",
+
+                    "learned_w0_parameters": [
+                        "w1_init",
+                        "b1_init",
+                        "w2_init",
+                        "b2_init"
+                    ],
+
+                    "query_parameter": "q_proj.weight",
+                    "key_parameter": "k_proj.weight",
+                    "value_parameter": "v_proj.weight",
+
+                    "inner_lr_parameters": [
+                        "ttt_lr_proj.weight",
+                        "ttt_lr_proj.bias",
+                        "token_idx_bias"
+                    ],
+
+                    "gate_parameter": "ttt_gate",
+
+                    "register_parameter":
+                        "register_token_bank.tokens"
+                },
+
+                "copied_files": copied,
+                "missing_files": missing
+            }
+
+            with open(
+                os.path.join(inference_dir, "inference_config.json"),
+                "w",
+            ) as f:
+                json.dump(inference_config, f, indent=2)
+
+        torch.distributed.barrier()
+        # Package RoboCasa / RoboTTT inference metadata.
+        if self._rank == 0:
+            import json
+            import shutil
+
+            inference_dir = os.path.join(save_path, "inference_meta")
+            os.makedirs(inference_dir, exist_ok=True)
+
+            dataset_meta_dir = (
+                "/mnt/public/chenzm/robottt/datasets/"
+                "robocasa365/BowlAndCup/lerobot/lerobot/meta"
+            )
+
+            files_to_copy = {
+                os.path.join(dataset_meta_dir, "modality.json"):
+                    "modality.json",
+                os.path.join(dataset_meta_dir, "embodiment.json"):
+                    "embodiment.json",
+                os.path.join(dataset_meta_dir, "stats.json"):
+                    "stats.json",
+                (
+                    "/mnt/public/chenzm/robottt/workspace/RLinf-robottt/"
+                    "examples/sft/config/robocasa365_panda_omron_config.py"
+                ):
+                    "robocasa365_panda_omron_config.py",
+            }
+
+            for src, dst_name in files_to_copy.items():
+                if os.path.isfile(src):
+                    shutil.copy2(
+                        src,
+                        os.path.join(inference_dir, dst_name),
+                    )
+
+            inference_config = {
+                "checkpoint_step": int(step),
+                "embodiment_tag": "new_embodiment",
+                "state_dim": 16,
+                "action_dim": 12,
+                "valid_action_dim": 12,
+                "image_nums": 3,
+                "num_action_chunks": 8,
+                "model_action_horizon": 40,
+                "model_max_action_dim": 132,
+                "robottt_fast_model": "mlp",
+                "robottt_w0_parameters": [
+                    "w1_init",
+                    "b1_init",
+                    "w2_init",
+                    "b2_init",
+                ],
+                "model_weights": "../model_state_dict/full_weights.pt",
+            }
+
+            with open(
+                os.path.join(
+                    inference_dir,
+                    "inference_config.json",
+                ),
+                "w",
+            ) as f:
+                json.dump(
+                    inference_config,
+                    f,
+                    indent=2,
+                )
+
+        torch.distributed.barrier()
+
         if isinstance(self.data_loader, StatefulDataLoader):
             state = self.data_loader.state_dict()
 
@@ -134,17 +308,36 @@ class FSDPVlaSftWorker(FSDPSftWorker):
         super().load_checkpoint(load_path)
 
         if isinstance(self.data_loader, StatefulDataLoader):
-            all_states = torch.load(
-                os.path.join(load_path, "data.pt"), weights_only=False
-            )
-            state = all_states[self._rank]
-            self.data_loader.load_state_dict(state)
-            self.data_iter = iter(self.data_loader)
+            data_path = os.path.join(load_path, "data.pt")
+            all_states = torch.load(data_path, weights_only=False)
+
+            if len(all_states) == self._world_size:
+                state = all_states[self._rank]
+                self.data_loader.load_state_dict(state)
+                self.data_iter = iter(self.data_loader)
+            else:
+                if self._rank == 0:
+                    print(
+                        f"[Checkpoint] dataloader world-size mismatch: "
+                        f"checkpoint={len(all_states)}, current={self._world_size}. "
+                        "Skipping dataloader state restore."
+                    )
+                # Re-create iterator from the current 8-rank dataloader.
+                self.data_iter = iter(self.data_loader)
 
             rng_path = os.path.join(load_path, "rng.pt")
             if os.path.exists(rng_path):
                 all_rng_states = torch.load(rng_path, weights_only=False)
-                set_rng_state(all_rng_states[self._rank])
+
+                if len(all_rng_states) == self._world_size:
+                    set_rng_state(all_rng_states[self._rank])
+                else:
+                    if self._rank == 0:
+                        print(
+                            f"[Checkpoint] RNG world-size mismatch: "
+                            f"checkpoint={len(all_rng_states)}, current={self._world_size}. "
+                            "Keeping current per-rank RNG state."
+                        )
 
             torch.distributed.barrier()
 

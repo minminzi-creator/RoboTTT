@@ -1,0 +1,192 @@
+defaults:
+- env/robocasa365@env.train
+- env/robocasa365@env.eval
+- model/gr00t_n1d7@actor.model
+- model/gr00t_n1d7@rollout.model
+- hybrid_engines/fsdp@actor.fsdp_config
+- weight_syncer/patch_syncer@weight_syncer
+- override hydra/job_logging: stdout
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+  - file://${oc.env:EMBODIED_PATH}/config/
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor,env,rollout: 0-0
+runner:
+  task_type: embodied
+  logger:
+    log_path: ../results
+    project_name: rlinf
+    experiment_name: robocasa365_bowlandcup_gr00t_n1d7_sft50k_eval_smoke
+    logger_backends:
+    - tensorboard
+  max_epochs: 1
+  max_steps: -1
+  only_eval: true
+  val_check_interval: -1
+  save_interval: -1
+  resume_dir: null
+  ckpt_path: /mnt/public/chenzm/gr00t_sft/logs/20260908-07:55:15-robocasa_bowlandcup_sft_gr00t_n1d7_sft_resume/robocasa_bowlandcup_sft_gr00t_n1d7_pure_sft_50k_resume/checkpoints/global_step_50000/actor/model_state_dict/full_weights.pt
+algorithm:
+  normalize_advantages: true
+  kl_penalty: kl
+  group_size: 1
+  reward_coef: 1.0
+  rollout_epoch: 1
+  eval_rollout_epoch: 1
+  reward_type: chunk_level
+  logprob_type: chunk_level
+  entropy_type: chunk_level
+  update_epoch: 1
+  adv_type: gae
+  loss_type: actor_critic
+  loss_agg_func: token-mean
+  kl_beta: 0.01
+  entropy_bonus: 0
+  clip_ratio_high: 0.2
+  clip_ratio_low: 0.2
+  clip_ratio_c: 3.0
+  value_clip: 0.2
+  huber_delta: 10.0
+  gamma: 0.99
+  gae_lambda: 0.95
+  filter_rewards: false
+  rewards_lower_bound: 0.1
+  rewards_upper_bound: 0.9
+  sampling_params:
+    do_sample: true
+    temperature_train: 1.0
+    temperature_eval: 0.6
+    top_k: 50
+    top_p: 1.0
+    repetition_penalty: 1.0
+    add_BOS: false
+  length_params:
+    max_new_token: null
+    max_length: 1024
+    min_length: 1
+env:
+  group_name: EnvGroup
+  train:
+    total_num_envs: 8
+    max_episode_steps: 256
+    max_steps_per_rollout_epoch: 256
+    auto_reset: true
+  eval:
+    total_num_envs: 1
+    group_size: 1
+    auto_reset: true
+    ignore_terminations: false
+    max_episode_steps: 2400
+    max_steps_per_rollout_epoch: 2400
+    is_eval: true
+    video_cfg:
+      save_video: true
+      info_on_video: true
+      video_base_dir: ${runner.logger.log_path}/video/eval
+    task_source: dataset_registry
+    dataset_source: human
+    split: pretrain
+    task_soup: []
+    task_names:
+    - BowlAndCup
+    task_filter: []
+    task_sampling_strategy: ordered
+    rotate_tasks_on_auto_reset: false
+    episode_horizon_source: max_episode_steps
+    rollout_epoch: 1
+    observation:
+      main_camera_key: robot0_agentview_left_image
+      wrist_camera_key: robot0_eye_in_hand_image
+      extra_camera_keys:
+      - robot0_agentview_right_image
+      flip_images_vertical: true
+      state_layout:
+      - base_pos
+      - base_quat
+      - base_to_eef_pos
+      - base_to_eef_quat
+      - gripper_qpos
+      state_key_map:
+        base_pos: robot0_base_pos
+        base_quat: robot0_base_quat
+        base_to_eef_pos: robot0_base_to_eef_pos
+        base_to_eef_quat: robot0_base_to_eef_quat
+        gripper_qpos: robot0_gripper_qpos
+    action_space:
+      env_action_dim: 12
+      disable_base_control: false
+      base_mode_index: 11
+      binarize_gripper_control: true
+rollout:
+  group_name: RolloutGroup
+  backend: huggingface
+  enable_offload: false
+  pipeline_stage_num: 1
+  model:
+    model_path: /mnt/public/chenzm/gr00t_sft/gr00t_n1d7_bowlandcup_sft50k_eval_model
+    backbone_model_path: /mnt/public/guozhen/models/Cosmos-Reason2-2B
+    precision: bf16
+    model_type: gr00t_n1d7
+    embodiment_tag: new_embodiment
+    obs_converter_type: robocasa365
+    action_dim: 12
+    valid_action_dim: 12
+    image_nums: 3
+    num_action_chunks: 8
+    denoising_steps: 4
+    num_steps: 4
+    add_value_head: false
+    rl_head_config:
+      add_value_head: false
+      use_ttt: false
+actor:
+  group_name: ActorGroup
+  training_backend: fsdp
+  micro_batch_size: 1
+  global_batch_size: 1
+  seed: 1234
+  enable_offload: false
+  model:
+    model_type: gr00t_n1d7
+    model_path: /mnt/public/chenzm/gr00t_sft/gr00t_n1d7_bowlandcup_sft50k_eval_model
+    backbone_model_path: /mnt/public/guozhen/models/Cosmos-Reason2-2B
+    embodiment_tag: new_embodiment
+    add_value_head: false
+    num_action_chunks: 8
+    denoising_steps: 4
+    precision: bf16
+    obs_converter_type: robocasa365
+    action_dim: 12
+    valid_action_dim: 12
+    image_nums: 3
+    num_steps: 4
+    rl_head_config:
+      add_value_head: false
+      use_ttt: false
+  optim:
+    lr: 5.0e-06
+    value_lr: 0.0001
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    weight_decay: 0.01
+    clip_grad: 1.0
+    critic_warmup_steps: 0
+  fsdp_config:
+    strategy: fsdp
+    sharding_strategy: full_shard
+    gradient_checkpointing: true
+    use_orig_params: true
+    mixed_precision:
+      param_dtype: ${actor.model.precision}
+      reduce_dtype: ${actor.model.precision}
+      buffer_dtype: ${actor.model.precision}
+reward:
+  use_reward_model: false
+critic:
+  use_critic_model: false

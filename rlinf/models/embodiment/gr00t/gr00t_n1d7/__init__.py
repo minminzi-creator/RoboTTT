@@ -78,6 +78,17 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
     if _action_dim is not None:
         config.action_dim = _action_dim
 
+    # Explicit embodiment-shape overrides.
+    # Useful when the checkpoint processor metadata belongs to another
+    # new_embodiment dataset, e.g. PNI -> RoboCasa PandaOmron.
+    _valid_action_dim = cfg.get("valid_action_dim")
+    if _valid_action_dim is not None:
+        config.valid_action_dim = int(_valid_action_dim)
+
+    _image_nums = cfg.get("image_nums")
+    if _image_nums is not None:
+        config.image_nums = int(_image_nums)
+
     backbone_model_path = OmegaConf.select(cfg, "backbone_model_path", default=None)
 
     model = GR00T_N1_7_ForRLActionPrediction.from_pretrained(
