@@ -257,7 +257,12 @@ def _batchify_gr00t_forward_input(
 
 # Which of a timestep's DiT tokens are routed through the TTT layers. The
 # paper's ablation adds them cumulatively; "register" is the full setting.
-TTT_CONTEXT_TOKEN_CHOICES = ("state", "state_action", "register")
+TTT_CONTEXT_TOKEN_CHOICES = (
+    "state",
+    "state_action",
+    "register_state",
+    "register",
+)
 
 
 class RoboTTTRegisterTokens(torch.nn.Module):
@@ -484,6 +489,14 @@ class FlowMatchingActionHeadForRLActionPrediction(Gr00tN1d7ActionHead):
                 f"ttt.context_tokens must be one of {TTT_CONTEXT_TOKEN_CHOICES}, "
                 f"got {self.ttt_context_tokens!r}."
             )
+        self.max_rollout_context_steps = int(
+            ttt_options.pop("max_rollout_context_steps", 0) or 0
+        )
+        if self.max_rollout_context_steps < 0:
+            raise ValueError(
+                "ttt.max_rollout_context_steps must be non-negative, got "
+                f"{self.max_rollout_context_steps}."
+            )
         train_ttt_only = bool(ttt_options.pop("train_ttt_only", False))
 
         self.model = TTTAlternateVLDiT(
@@ -540,7 +553,7 @@ class FlowMatchingActionHeadForRLActionPrediction(Gr00tN1d7ActionHead):
         mask[num_register] = True  # state token, always included
         if self.ttt_context_tokens in ("state_action", "register"):
             mask[num_register + 1 :] = True
-        if self.ttt_context_tokens == "register":
+        if self.ttt_context_tokens in ("register_state", "register"):
             mask[:num_register] = True
         return mask
 
@@ -1697,12 +1710,26 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
         """Build the TTT context for one rollout chunk, resetting finished envs."""
         if not self.action_head.ttt_enabled:
             return None
+        states = self._ttt_rollout_states.get(int(stage_id))
         reset_mask = None
         if dones is not None:
             reset_mask = dones.reshape(-1).to(dtype=torch.bool)
+        max_steps = self.action_head.max_rollout_context_steps
+        if max_steps > 0 and states and states[0] is not None:
+            offset = states[0].seq_offset
+            if not torch.is_tensor(offset):
+                offset = torch.tensor([offset])
+            selected_per_step = int(self.action_head.ttt_token_mask.sum().item())
+            horizon_reset = offset.reshape(-1) >= max_steps * selected_per_step
+            horizon_reset = horizon_reset.to(dtype=torch.bool)
+            reset_mask = (
+                horizon_reset
+                if reset_mask is None
+                else reset_mask.to(horizon_reset.device) | horizon_reset
+            )
         return self.action_head.make_ttt_context(
             num_timesteps=1,
-            states=self._ttt_rollout_states.get(int(stage_id)),
+            states=states,
             reset_mask=reset_mask,
             detach_states=True,
         )

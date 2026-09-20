@@ -1,3 +1,17 @@
+# Copyright 2026 The RLinf Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 from types import SimpleNamespace
 
 import pytest
@@ -6,12 +20,12 @@ from transformers.feature_extraction_utils import BatchFeature
 
 from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
     FlowMatchingActionHeadForRLActionPrediction,
+    GR00T_N1_7_ForRLActionPrediction,
 )
 from rlinf.models.embodiment.gr00t.gr00t_n1d7.ttt import (
     TTTContext,
     TTTState,
 )
-
 
 # ============================================================
 # Helpers
@@ -793,6 +807,17 @@ def test_loss_mask_zero_still_allows_ttt_state_update():
             ],
         ),
         (
+            "register_state",
+            [
+                True,
+                True,
+                True,
+                False,
+                False,
+                False,
+            ],
+        ),
+        (
             "register",
             [
                 True,
@@ -820,6 +845,9 @@ def test_ttt_context_token_mask_routes_expected_tokens(
     context_tokens='state_action':
         STATE + ACTION
 
+    context_tokens='register_state':
+        REGISTER + STATE
+
     context_tokens='register':
         REGISTER + STATE + ACTION
     """
@@ -842,4 +870,38 @@ def test_ttt_context_token_mask_routes_expected_tokens(
     torch.testing.assert_close(
         mask,
         expected_tensor,
+    )
+
+
+def test_rollout_context_resets_at_trained_horizon():
+    states = [
+        TTTState(
+            params=(torch.zeros(2, 1),),
+            seq_offset=torch.tensor([6, 5]),
+        )
+    ]
+
+    class _Head:
+        ttt_enabled = True
+        max_rollout_context_steps = 2
+        ttt_token_mask = torch.tensor([True, True, True])
+
+        @staticmethod
+        def make_ttt_context(**kwargs):
+            return TTTContext(**kwargs)
+
+    policy = SimpleNamespace(
+        action_head=_Head(),
+        _ttt_rollout_states={0: states},
+    )
+
+    context = GR00T_N1_7_ForRLActionPrediction._rollout_ttt_context(
+        policy,
+        stage_id=0,
+        dones=torch.tensor([False, True]),
+    )
+
+    torch.testing.assert_close(
+        context.reset_mask,
+        torch.tensor([True, True]),
     )

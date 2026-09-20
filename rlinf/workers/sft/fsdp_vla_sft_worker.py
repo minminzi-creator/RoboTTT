@@ -111,32 +111,24 @@ class FSDPVlaSftWorker(FSDPSftWorker):
     def save_checkpoint(self, save_path: str, step: int = 0) -> None:
         super().save_checkpoint(save_path, step)
 
-        # RoboTTT inference bundle:
-        # full_weights.pt already stores learned W0 and all trained model params.
-        # Here we additionally package the RoboCasa interface metadata required
-        # by the inference side.
+        # Package the exact runtime configuration used by this checkpoint.
         if self._rank == 0:
             import json
             import shutil
 
+            from omegaconf import OmegaConf
+
             inference_dir = os.path.join(save_path, "inference_meta")
             os.makedirs(inference_dir, exist_ok=True)
 
-            dataset_meta_dir = (
-                "/mnt/public/chenzm/robottt/datasets/"
-                "robocasa365/BowlAndCup/lerobot/lerobot/meta"
+            dataset_meta_dir = os.path.join(
+                str(self.cfg.data.train_data_paths), "meta"
             )
-
-            modality_config_path = (
-                "/mnt/public/chenzm/robottt/workspace/RLinf-robottt/"
-                "examples/sft/config/robocasa365_panda_omron_config.py"
+            robottt_cfg = self.cfg.data.get("robottt", {}) or {}
+            ttt_cfg = self.cfg.actor.model.get("rl_head_config", {}).get(
+                "ttt", {}
             )
-
-            train_config_path = (
-                "/mnt/public/chenzm/robottt/workspace/RLinf-robottt/"
-                "examples/sft/config/"
-                "robocasa_bowlandcup_sft_gr00t_n1d7_robottt_50k.yaml"
-            )
+            modality_config_path = robottt_cfg.get("modality_config_path")
 
             files_to_copy = {
                 os.path.join(dataset_meta_dir, "modality.json"):
@@ -145,103 +137,11 @@ class FSDPVlaSftWorker(FSDPSftWorker):
                     "embodiment.json",
                 os.path.join(dataset_meta_dir, "stats.json"):
                     "stats.json",
-                modality_config_path:
-                    "robocasa365_panda_omron_config.py",
-                train_config_path:
-                    "train_config.yaml",
             }
-
-            copied = []
-            missing = []
-
-            for src, dst_name in files_to_copy.items():
-                if os.path.isfile(src):
-                    shutil.copy2(src, os.path.join(inference_dir, dst_name))
-                    copied.append(dst_name)
-                else:
-                    missing.append(src)
-
-            inference_config = {
-                "checkpoint_step": int(step),
-
-                "model_weights":
-                    "../model_state_dict/full_weights.pt",
-
-                "embodiment_tag": "new_embodiment",
-
-                "state_dim": 16,
-                "action_dim": 12,
-                "valid_action_dim": 12,
-                "image_nums": 3,
-
-                "num_action_chunks": 8,
-                "model_action_horizon": 40,
-                "model_max_action_dim": 132,
-
-                "robottt": {
-                    "enabled": True,
-                    "fast_model": "mlp",
-
-                    "learned_w0_parameters": [
-                        "w1_init",
-                        "b1_init",
-                        "w2_init",
-                        "b2_init"
-                    ],
-
-                    "query_parameter": "q_proj.weight",
-                    "key_parameter": "k_proj.weight",
-                    "value_parameter": "v_proj.weight",
-
-                    "inner_lr_parameters": [
-                        "ttt_lr_proj.weight",
-                        "ttt_lr_proj.bias",
-                        "token_idx_bias"
-                    ],
-
-                    "gate_parameter": "ttt_gate",
-
-                    "register_parameter":
-                        "register_token_bank.tokens"
-                },
-
-                "copied_files": copied,
-                "missing_files": missing
-            }
-
-            with open(
-                os.path.join(inference_dir, "inference_config.json"),
-                "w",
-            ) as f:
-                json.dump(inference_config, f, indent=2)
-
-        torch.distributed.barrier()
-        # Package RoboCasa / RoboTTT inference metadata.
-        if self._rank == 0:
-            import json
-            import shutil
-
-            inference_dir = os.path.join(save_path, "inference_meta")
-            os.makedirs(inference_dir, exist_ok=True)
-
-            dataset_meta_dir = (
-                "/mnt/public/chenzm/robottt/datasets/"
-                "robocasa365/BowlAndCup/lerobot/lerobot/meta"
-            )
-
-            files_to_copy = {
-                os.path.join(dataset_meta_dir, "modality.json"):
-                    "modality.json",
-                os.path.join(dataset_meta_dir, "embodiment.json"):
-                    "embodiment.json",
-                os.path.join(dataset_meta_dir, "stats.json"):
-                    "stats.json",
-                (
-                    "/mnt/public/chenzm/robottt/workspace/RLinf-robottt/"
-                    "examples/sft/config/robocasa365_panda_omron_config.py"
-                ):
-                    "robocasa365_panda_omron_config.py",
-            }
+            if modality_config_path:
+                files_to_copy[str(modality_config_path)] = os.path.basename(
+                    str(modality_config_path)
+                )
 
             for src, dst_name in files_to_copy.items():
                 if os.path.isfile(src):
@@ -250,23 +150,33 @@ class FSDPVlaSftWorker(FSDPSftWorker):
                         os.path.join(inference_dir, dst_name),
                     )
 
+            OmegaConf.save(self.cfg, os.path.join(inference_dir, "train_config.yaml"))
+
             inference_config = {
                 "checkpoint_step": int(step),
-                "embodiment_tag": "new_embodiment",
-                "state_dim": 16,
-                "action_dim": 12,
-                "valid_action_dim": 12,
-                "image_nums": 3,
-                "num_action_chunks": 8,
+                "embodiment_tag": str(self.cfg.actor.model.embodiment_tag),
+                "action_dim": int(self.cfg.actor.model.action_dim),
+                "valid_action_dim": int(self.cfg.actor.model.valid_action_dim),
+                "image_nums": int(self.cfg.actor.model.image_nums),
+                "num_action_chunks": int(self.cfg.actor.model.num_action_chunks),
                 "model_action_horizon": 40,
                 "model_max_action_dim": 132,
-                "robottt_fast_model": "mlp",
-                "robottt_w0_parameters": [
-                    "w1_init",
-                    "b1_init",
-                    "w2_init",
-                    "b2_init",
-                ],
+                "robottt": {
+                    "enabled": bool(
+                        self.cfg.actor.model.rl_head_config.get("use_ttt", False)
+                    ),
+                    "fast_model": str(ttt_cfg.get("fast_model", "mlp")),
+                    "context_tokens": str(ttt_cfg.get("context_tokens", "register")),
+                    "max_rollout_context_steps": int(
+                        ttt_cfg.get("max_rollout_context_steps", 0) or 0
+                    ),
+                    "training_num_timesteps": int(
+                        robottt_cfg.get("num_timesteps", 1)
+                    ),
+                    "training_timestep_stride": int(
+                        robottt_cfg.get("timestep_stride", 1)
+                    ),
+                },
                 "model_weights": "../model_state_dict/full_weights.pt",
             }
 

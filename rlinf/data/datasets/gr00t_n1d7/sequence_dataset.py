@@ -176,6 +176,7 @@ class Gr00tN1d7SequenceDataset(Dataset):
         processor: Any,
         embodiment_tag: Any,
         num_timesteps: int = 16,
+        timestep_stride: int = 1,
         seed: int = 0,
         video_backend: str = "torchcodec",
         human_video_path: Optional[str] = None,
@@ -187,8 +188,13 @@ class Gr00tN1d7SequenceDataset(Dataset):
         self.processor = processor
         self.embodiment_tag = embodiment_tag
         self.num_timesteps = int(num_timesteps)
+        self.timestep_stride = int(timestep_stride)
+        if self.timestep_stride <= 0:
+            raise ValueError(
+                f"timestep_stride must be positive, got {self.timestep_stride}"
+            )
         self.human_video_timesteps = int(human_video_timesteps)
-        self.rng = np.random.RandomState(seed)
+        self.seed = int(seed)
 
         tag_value = embodiment_tag.value
         if tag_value not in processor.modality_configs:
@@ -216,7 +222,7 @@ class Gr00tN1d7SequenceDataset(Dataset):
         )
 
         self.human_loader = None
-        self._human_rows: dict[int, tuple[int, int, int]] = {}
+        self._human_rows: dict[int, list[tuple[int, int, int]]] = {}
         if human_video_path and self.human_video_timesteps > 0:
             self.human_loader = LeRobotEpisodeLoader(
                 dataset_path=human_video_path,
@@ -232,7 +238,9 @@ class Gr00tN1d7SequenceDataset(Dataset):
                     f"human_video_timesteps={self.human_video_timesteps} with "
                     f"action_horizon={self.action_horizon}."
                 )
-            human_by_id = {row[0]: row for row in human_index}
+            human_by_id: dict[int, list[tuple[int, int, int]]] = {}
+            for row in human_index:
+                human_by_id.setdefault(row[0], []).append(row)
             # Pair by episode id when both datasets share ids; otherwise by order
             # so every robot window has a human prefix of fixed length T_h.
             n_id_matches = 0
@@ -241,7 +249,7 @@ class Gr00tN1d7SequenceDataset(Dataset):
                     self._human_rows[robot_ep] = human_by_id[robot_ep]
                     n_id_matches += 1
                 else:
-                    self._human_rows[robot_ep] = human_index[i % len(human_index)]
+                    self._human_rows[robot_ep] = [human_index[i % len(human_index)]]
             if n_id_matches == 0:
                 logger.warning(
                     "human_video_path=%s has no episode ids overlapping the "
@@ -259,15 +267,29 @@ class Gr00tN1d7SequenceDataset(Dataset):
                 )
 
     def _build_index(self, loader, num_timesteps: int) -> list[tuple[int, int, int]]:
-        """``(episode_id, max_start, length)`` for episodes that fit a window."""
+        """Enumerate every valid ``(episode_id, start, length)`` window.
+
+        The returned index is consumed directly by ``DistributedSampler``.
+        Enumerating starts is important: randomly resampling inside
+        ``__getitem__`` discards the sampler index and clones the same private
+        NumPy RNG into every dataloader worker, which makes workers emit
+        duplicate windows.
+        """
         index = []
         for episode_id, length in enumerate(loader.episode_lengths):
             # Last step of the window is start+T-1 and still needs H action
             # frames, so start <= length - H - T + 1. Zero is a legal single
             # window at the start of the episode; negative means too short.
-            max_start = int(length) - self.action_horizon - (num_timesteps - 1)
+            max_start = (
+                int(length)
+                - self.action_horizon
+                - (num_timesteps - 1) * self.timestep_stride
+            )
             if max_start >= 0:
-                index.append((episode_id, max_start, int(length)))
+                index.extend(
+                    (episode_id, start, int(length))
+                    for start in range(max_start + 1)
+                )
         return index
 
     def __len__(self) -> int:
@@ -291,12 +313,15 @@ class Gr00tN1d7SequenceDataset(Dataset):
         processed = self.processor([{"content": step}])
         return processed
 
-    def _sample_window(self, loader, index_row, num_timesteps: int, *, mask_loss: bool):
-        episode_id, max_start, _ = index_row
-        start = int(self.rng.randint(0, max_start + 1))
+    def _load_window(self, loader, index_row, num_timesteps: int, *, mask_loss: bool):
+        episode_id, start, _ = index_row
         episode_data = loader[episode_id]
         steps = [
-            self._process_step(episode_data, start + t, mask_loss=mask_loss)
+            self._process_step(
+                episode_data,
+                start + t * self.timestep_stride,
+                mask_loss=mask_loss,
+            )
             for t in range(num_timesteps)
         ]
         loss_mask = np.zeros(num_timesteps, dtype=np.float32) if mask_loss else np.ones(
@@ -305,9 +330,8 @@ class Gr00tN1d7SequenceDataset(Dataset):
         return steps, loss_mask
 
     def __getitem__(self, index: int) -> dict[str, Any]:
-        del index  # windows are sampled, not enumerated
-        robot_row = self._index[int(self.rng.randint(0, len(self._index)))]
-        robot_steps, robot_mask = self._sample_window(
+        robot_row = self._index[int(index) % len(self._index)]
+        robot_steps, robot_mask = self._load_window(
             self.loader, robot_row, self.num_timesteps, mask_loss=False
         )
 
@@ -315,9 +339,10 @@ class Gr00tN1d7SequenceDataset(Dataset):
         context_mask = np.zeros((0,), dtype=np.float32)
         episode_id = robot_row[0]
         if self.human_loader is not None:
-            human_row = self._human_rows[episode_id]
+            human_rows = self._human_rows[episode_id]
+            human_row = human_rows[int(index) % len(human_rows)]
             try:
-                context_steps, context_mask = self._sample_window(
+                context_steps, context_mask = self._load_window(
                     self.human_loader,
                     human_row,
                     self.human_video_timesteps,
@@ -330,8 +355,9 @@ class Gr00tN1d7SequenceDataset(Dataset):
                     exc,
                 )
                 # Fall back to any valid human row so the collated length stays T_h + T.
-                fallback = self._human_rows[next(iter(self._human_rows))]
-                context_steps, context_mask = self._sample_window(
+                fallback_rows = self._human_rows[next(iter(self._human_rows))]
+                fallback = fallback_rows[int(index) % len(fallback_rows)]
+                context_steps, context_mask = self._load_window(
                     self.human_loader,
                     fallback,
                     self.human_video_timesteps,
@@ -428,11 +454,13 @@ def build_gr00t_n1d7_sft_dataloader(
             modality_config_path,
         )
     num_timesteps = int(robottt_cfg.get("num_timesteps", data_cfg.get("num_timesteps", 16)))
+    timestep_stride = int(robottt_cfg.get("timestep_stride", 1))
     dataset = Gr00tN1d7SequenceDataset(
         dataset_path=str(dataset_path),
         processor=processor,
         embodiment_tag=embodiment_tag,
         num_timesteps=num_timesteps,
+        timestep_stride=timestep_stride,
         seed=int(model_cfg.get("seed", cfg.actor.get("seed", 0))) + rank,
         video_backend=str(data_cfg.get("video_backend", "torchcodec")),
         human_video_path=robottt_cfg.get("human_video_path", None),
@@ -480,9 +508,10 @@ def build_gr00t_n1d7_sft_dataloader(
         else None,
     )
     logger.info(
-        "GR00T N1.7 RoboTTT SFT dataset: %d windows, T=%d, from %s",
+        "GR00T N1.7 RoboTTT SFT dataset: %d windows, T=%d, stride=%d, from %s",
         len(dataset),
         num_timesteps,
+        timestep_stride,
         dataset_path,
     )
     return data_loader, {"num_samples": len(dataset)}
