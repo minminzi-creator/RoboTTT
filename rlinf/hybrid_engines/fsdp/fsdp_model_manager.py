@@ -389,6 +389,15 @@ class FSDPModelManager:
             save_full_model_weights=self._cfg.fsdp_config.get(
                 "save_full_model_weights", True
             ),
+            checkpoint_local_staging_dir=self._cfg.fsdp_config.get(
+                "checkpoint_local_staging_dir", None
+            ),
+            checkpoint_io_retries=self._cfg.fsdp_config.get(
+                "checkpoint_io_retries", 0
+            ),
+            checkpoint_io_retry_delay_s=self._cfg.fsdp_config.get(
+                "checkpoint_io_retry_delay_s", 0
+            ),
         )
 
         if restore_weight_offload:

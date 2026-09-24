@@ -20,6 +20,42 @@ from omegaconf import DictConfig, OmegaConf
 from rlinf.utils.logging import get_logger
 
 
+def _audit_runtime_model_shapes(model, cfg):
+    expected = {
+        "action_dim": int(cfg.action_dim),
+        "valid_action_dim": int(cfg.valid_action_dim),
+        "image_nums": int(cfg.image_nums),
+    }
+    observed = {
+        "model.action_dim": getattr(model, "action_dim", None),
+        "model.valid_action_dim": getattr(model, "valid_action_dim", None),
+        "model.image_nums": getattr(model, "image_nums", None),
+        "action_head.env_action_dim": getattr(
+            model.action_head, "env_action_dim", None
+        ),
+        "action_head.valid_action_dim": getattr(
+            model.action_head, "valid_action_dim", None
+        ),
+    }
+    expected_by_observed_name = {
+        "model.action_dim": expected["action_dim"],
+        "model.valid_action_dim": expected["valid_action_dim"],
+        "model.image_nums": expected["image_nums"],
+        "action_head.env_action_dim": expected["action_dim"],
+        "action_head.valid_action_dim": expected["valid_action_dim"],
+    }
+    mismatches = [
+        f"{name}={observed[name]!r} (expected {wanted})"
+        for name, wanted in expected_by_observed_name.items()
+        if observed[name] != wanted
+    ]
+    if mismatches:
+        raise ValueError(
+            "GR00T runtime shape audit failed: " + "; ".join(mismatches)
+        )
+    return expected
+
+
 def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
     from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
     from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7
@@ -102,6 +138,15 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
         output_action_chunks=cfg.num_action_chunks,
         obs_converter_type=cfg.obs_converter_type,
         rl_head_config=cfg.rl_head_config,
+    )
+
+    runtime_shapes = _audit_runtime_model_shapes(model, cfg)
+    logger.info(
+        "GR00T runtime shape audit passed: action_dim=%d, "
+        "valid_action_dim=%d, image_nums=%d",
+        runtime_shapes["action_dim"],
+        runtime_shapes["valid_action_dim"],
+        runtime_shapes["image_nums"],
     )
 
     model.to(torch_dtype)

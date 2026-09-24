@@ -115,12 +115,79 @@ class RecordVideo(gym.Wrapper):
 
     def _get_image_from_dict(self, obs: dict) -> Optional[Any]:
         """Pick the best image field from an observation dict."""
+        multiview = self._get_multiview_image_from_dict(obs)
+        if multiview is not None:
+            return multiview
         if hasattr(self.env, "capture_image"):
             return self.env.capture_image()
         for key in ("main_images", "images", "rgb", "full_image", "main_image"):
             if key in obs and obs[key] is not None:
                 return obs[key]
         return None
+
+    def _get_multiview_image_from_dict(self, obs: dict) -> Optional[np.ndarray]:
+        """Build one synchronized horizontal strip from policy camera observations.
+
+        RoboCasa365 exposes the three policy views as ``main_images``,
+        ``wrist_images`` and ``extra_view_images``.  Recording those tensors
+        directly guarantees that all panels come from the exact same rollout
+        step; no extra environment render or second evaluation is required.
+
+        This is opt-in through ``video_cfg.multiview_obs`` so existing video
+        output remains unchanged for every environment and configuration.
+        """
+        if not bool(self.video_cfg.get("multiview_obs", False)):
+            return None
+
+        main = obs.get("main_images")
+        if main is None:
+            return None
+
+        main = self._to_numpy(main)
+        if main.ndim == 3:
+            main = main[None, ...]
+        if main.ndim != 4:
+            warnings.warn(
+                "multiview_obs requires main_images shaped [B, H, W, C], "
+                f"got {main.shape}"
+            )
+            return None
+
+        views = [main]
+        wrist = obs.get("wrist_images")
+        if wrist is not None:
+            wrist = self._to_numpy(wrist)
+            if wrist.ndim == 3:
+                wrist = wrist[None, ...]
+            if wrist.ndim == 4:
+                views.append(wrist)
+
+        extras = obs.get("extra_view_images")
+        if extras is not None:
+            extras = self._to_numpy(extras)
+            if extras.ndim == 4:
+                extras = extras[:, None, ...]
+            if extras.ndim == 5:
+                views.extend(extras[:, index] for index in range(extras.shape[1]))
+
+        expected = (main.shape[0], main.shape[1], main.shape[3])
+        compatible = [
+            view
+            for view in views
+            if view.ndim == 4
+            and (view.shape[0], view.shape[1], view.shape[3]) == expected
+        ]
+        if len(compatible) < 2:
+            warnings.warn(
+                "multiview_obs was enabled but fewer than two compatible camera "
+                "views were found; falling back to main_images"
+            )
+            return main
+
+        strip = np.concatenate(compatible, axis=2)
+        if strip.dtype != np.uint8:
+            strip = strip.astype(np.uint8)
+        return strip
 
     def _extract_frame_batches(self, obs: Any) -> list[list[np.ndarray]]:
         """Extract a list of per-step image batches from obs."""

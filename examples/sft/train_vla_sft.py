@@ -30,7 +30,10 @@ mp.set_start_method("spawn", force=True)
 
 def _launch_sft_worker(cfg, cluster, actor_placement):
     model_type = str(cfg.actor.model.model_type)
-    if model_type == "gr00t_n1d7":
+    use_ttt = bool(
+        cfg.actor.model.get("rl_head_config", {}).get("use_ttt", False)
+    )
+    if model_type == "gr00t_n1d7" and use_ttt:
         from rlinf.workers.sft.fsdp_robottt_sft_worker import FSDPRoboTTTSftWorker
 
         worker_cls = FSDPRoboTTTSftWorker

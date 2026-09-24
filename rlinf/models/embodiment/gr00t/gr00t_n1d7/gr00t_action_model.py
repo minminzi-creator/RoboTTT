@@ -1285,6 +1285,10 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
             )
         # Per-pipeline-stage TTT fast weights carried across rollout chunks.
         self._ttt_rollout_states: dict[int, Optional[list]] = {}
+        # Optional state for debouncing RoboCasa's discrete arm/base mode.
+        # Kept separate from TTT state because it is an environment action
+        # contract, not learned model memory.
+        self._control_mode_states: dict[int, list[dict[str, int]]] = {}
 
     def _load_modality_processor(
         self,
@@ -1600,7 +1604,116 @@ class GR00T_N1_7_ForRLActionPrediction(Gr00tN1d7, BasePolicy):
             chunk_size=self.output_action_chunks,
         )
         raw_action = self._apply_exploration_noise(raw_action, mode)
+        raw_action = self._stabilize_robocasa_control_mode(
+            raw_action,
+            stage_id=stage_id,
+            dones=dones,
+        )
         return raw_action, result
+
+    def _stabilize_robocasa_control_mode(
+        self,
+        raw_action: np.ndarray | torch.Tensor,
+        *,
+        stage_id: int,
+        dones: Optional[torch.Tensor],
+    ) -> np.ndarray | torch.Tensor:
+        """Debounce PandaOmron's discrete arm/base controller mode.
+
+        ``control_mode`` is trained as ``{-1, +1}``, but flow matching emits a
+        continuous value. Passing that value straight to RoboSuite makes every
+        zero crossing switch the hybrid controller's arm-goal update rule. A
+        weak checkpoint can cross zero repeatedly and produce visible chatter.
+
+        The stabilizer is deliberately opt-in (``control_mode_stabilizer`` in
+        ``rl_head_config``) so legacy checkpoints and training are unchanged.
+        A switch is accepted only after a confident value persists for the
+        configured number of environment steps.
+        """
+        config = self.action_head.rl_config.get("control_mode_stabilizer", {}) or {}
+        if not bool(config.get("enabled", False)):
+            return raw_action
+        if self.obs_converter_type != "robocasa365":
+            return raw_action
+
+        is_tensor = torch.is_tensor(raw_action)
+        actions = (
+            raw_action.detach().cpu().numpy().copy()
+            if is_tensor
+            else np.asarray(raw_action).copy()
+        )
+        squeeze_batch = actions.ndim == 2
+        if squeeze_batch:
+            actions = actions[None, ...]
+        if actions.ndim != 3:
+            raise ValueError(
+                "RoboCasa control-mode stabilization expects [B, T, D] actions, "
+                f"got {actions.shape}."
+            )
+
+        mode_index = int(config.get("action_index", 11))
+        if not -actions.shape[-1] <= mode_index < actions.shape[-1]:
+            raise ValueError(
+                f"control_mode action_index={mode_index} is invalid for {actions.shape}."
+            )
+        mode_index %= actions.shape[-1]
+        enter_base = float(config.get("enter_base_threshold", 0.5))
+        enter_arm = float(config.get("enter_arm_threshold", -0.5))
+        confirm_steps = max(1, int(config.get("confirm_steps", 16)))
+        initial_mode = 1 if int(config.get("initial_mode", -1)) > 0 else -1
+
+        stage_id = int(stage_id)
+        states = self._control_mode_states.get(stage_id)
+        if states is None or len(states) != actions.shape[0]:
+            states = [
+                {"mode": initial_mode, "candidate": initial_mode, "count": 0}
+                for _ in range(actions.shape[0])
+            ]
+            self._control_mode_states[stage_id] = states
+
+        reset_mask = np.zeros(actions.shape[0], dtype=bool)
+        if dones is not None:
+            if torch.is_tensor(dones):
+                reset_mask = dones.detach().cpu().numpy().reshape(-1).astype(bool)
+            else:
+                reset_mask = np.asarray(dones).reshape(-1).astype(bool)
+
+        for batch_index, state in enumerate(states):
+            if batch_index < len(reset_mask) and reset_mask[batch_index]:
+                state.update(mode=initial_mode, candidate=initial_mode, count=0)
+
+            for time_index in range(actions.shape[1]):
+                value = float(actions[batch_index, time_index, mode_index])
+                desired = state["mode"]
+                if state["mode"] < 0 and value >= enter_base:
+                    desired = 1
+                elif state["mode"] > 0 and value <= enter_arm:
+                    desired = -1
+
+                if desired == state["mode"]:
+                    state["candidate"] = state["mode"]
+                    state["count"] = 0
+                elif desired == state["candidate"]:
+                    state["count"] += 1
+                else:
+                    state["candidate"] = desired
+                    state["count"] = 1
+
+                if state["count"] >= confirm_steps:
+                    state["mode"] = state["candidate"]
+                    state["count"] = 0
+
+                actions[batch_index, time_index, mode_index] = state["mode"]
+
+        if squeeze_batch:
+            actions = actions[0]
+        if is_tensor:
+            return torch.as_tensor(
+                actions,
+                dtype=raw_action.dtype,
+                device=raw_action.device,
+            )
+        return actions
 
     @staticmethod
     def _coerce_observation_values_to_numpy(

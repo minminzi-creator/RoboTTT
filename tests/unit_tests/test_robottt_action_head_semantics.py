@@ -14,6 +14,7 @@
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 import torch
 from transformers.feature_extraction_utils import BatchFeature
@@ -905,3 +906,47 @@ def test_rollout_context_resets_at_trained_horizon():
         context.reset_mask,
         torch.tensor([True, True]),
     )
+
+
+def test_robocasa_control_mode_stabilizer_debounces_and_resets():
+    policy = SimpleNamespace(
+        action_head=SimpleNamespace(
+            rl_config={
+                "control_mode_stabilizer": {
+                    "enabled": True,
+                    "confirm_steps": 16,
+                    "enter_base_threshold": 0.5,
+                    "enter_arm_threshold": -0.5,
+                    "initial_mode": -1,
+                }
+            }
+        ),
+        obs_converter_type="robocasa365",
+        _control_mode_states={},
+    )
+
+    first = np.zeros((1, 8, 12), dtype=np.float32)
+    first[..., 11] = 0.9
+    first_out = GR00T_N1_7_ForRLActionPrediction._stabilize_robocasa_control_mode(
+        policy, first, stage_id=0, dones=torch.tensor([False])
+    )
+    np.testing.assert_array_equal(first_out[..., 11], -1)
+
+    second = first.copy()
+    second_out = GR00T_N1_7_ForRLActionPrediction._stabilize_robocasa_control_mode(
+        policy, second, stage_id=0, dones=torch.tensor([False])
+    )
+    np.testing.assert_array_equal(second_out[0, :7, 11], -1)
+    assert second_out[0, 7, 11] == 1
+
+    uncertain = first.copy()
+    uncertain[..., 11] = np.array([0.2, -0.2] * 4)
+    uncertain_out = GR00T_N1_7_ForRLActionPrediction._stabilize_robocasa_control_mode(
+        policy, uncertain, stage_id=0, dones=torch.tensor([False])
+    )
+    np.testing.assert_array_equal(uncertain_out[..., 11], 1)
+
+    reset_out = GR00T_N1_7_ForRLActionPrediction._stabilize_robocasa_control_mode(
+        policy, first, stage_id=0, dones=torch.tensor([True])
+    )
+    np.testing.assert_array_equal(reset_out[..., 11], -1)

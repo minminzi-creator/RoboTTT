@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import logging
 import os
+import shutil
+import tempfile
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from logging import Logger
@@ -38,6 +42,8 @@ from rlinf.hybrid_engines.fsdp.utils import (
 )
 from rlinf.scheduler import Worker
 from rlinf.utils.utils import clear_memory
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from rlinf.workers.actor.fsdp_actor_worker import FSDPActor
@@ -181,6 +187,83 @@ class FSDPStrategyBase(ABC):
         print(f"Save using _use_new_zipfile_serialization to {path}")
 
     @classmethod
+    def _save_full_model_weights(
+        cls,
+        obj,
+        destination: str,
+        staging_dir: Optional[str] = None,
+        io_retries: int = 0,
+        retry_delay_s: float = 0,
+    ) -> None:
+        """Publish full weights atomically, optionally staging them off-filesystem."""
+        if io_retries < 0:
+            raise ValueError("io_retries must be non-negative")
+
+        destination_dir = os.path.dirname(destination)
+        os.makedirs(destination_dir, exist_ok=True)
+        stage_root = staging_dir or destination_dir
+        os.makedirs(stage_root, exist_ok=True)
+        stage_fd, stage_path = tempfile.mkstemp(
+            prefix=".full_weights.staging-",
+            suffix=".pt",
+            dir=stage_root,
+        )
+        os.close(stage_fd)
+
+        try:
+            if Worker.torch_device_type == "npu":
+                cls.save_npu_weight(obj, stage_path)
+            else:
+                torch.save(obj, stage_path)
+
+            if staging_dir is None:
+                os.replace(stage_path, destination)
+                stage_path = None
+                return
+
+            source_size = os.path.getsize(stage_path)
+            max_attempts = io_retries + 1
+            last_error = None
+            for attempt in range(1, max_attempts + 1):
+                destination_fd, incomplete_path = tempfile.mkstemp(
+                    prefix=f".{os.path.basename(destination)}.incomplete-",
+                    dir=destination_dir,
+                )
+                os.close(destination_fd)
+                try:
+                    shutil.copyfile(stage_path, incomplete_path)
+                    copied_size = os.path.getsize(incomplete_path)
+                    if copied_size != source_size:
+                        raise OSError(
+                            f"checkpoint copy size mismatch: {copied_size} != {source_size}"
+                        )
+                    with open(incomplete_path, "rb") as copied_file:
+                        os.fsync(copied_file.fileno())
+                    os.replace(incomplete_path, destination)
+                    return
+                except (OSError, RuntimeError) as error:
+                    last_error = error
+                    try:
+                        os.unlink(incomplete_path)
+                    except FileNotFoundError:
+                        pass
+                    if attempt < max_attempts:
+                        logger.warning(
+                            "Checkpoint copy failed on attempt %d/%d: %s; retrying",
+                            attempt,
+                            max_attempts,
+                            error,
+                        )
+                        time.sleep(retry_delay_s)
+            raise last_error
+        finally:
+            if stage_path is not None:
+                try:
+                    os.unlink(stage_path)
+                except FileNotFoundError:
+                    pass
+
+    @classmethod
     def save_checkpoint(
         cls,
         model: Union[FSDP, FSDPModule],
@@ -189,6 +272,9 @@ class FSDPStrategyBase(ABC):
         save_path: str,
         save_full_model_weights: bool = True,
         checkpoint_format: str = "dcp",
+        checkpoint_local_staging_dir: Optional[str] = None,
+        checkpoint_io_retries: int = 0,
+        checkpoint_io_retry_delay_s: float = 0,
     ) -> None:
         """
         Save the training state checkpoint.
@@ -253,16 +339,13 @@ class FSDPStrategyBase(ABC):
             model_state_dict = get_model_state_dict(model=model, options=opts)
             if torch.distributed.get_rank() == 0:
                 os.makedirs(sd_save_path, exist_ok=True)
-                # npu requires a specific model parameter save
-                if Worker.torch_device_type == "npu":
-                    cls.save_npu_weight(
-                        model_state_dict, os.path.join(sd_save_path, "full_weights.pt")
-                    )
-
-                else:
-                    torch.save(
-                        model_state_dict, os.path.join(sd_save_path, "full_weights.pt")
-                    )
+                cls._save_full_model_weights(
+                    model_state_dict,
+                    os.path.join(sd_save_path, "full_weights.pt"),
+                    staging_dir=checkpoint_local_staging_dir,
+                    io_retries=checkpoint_io_retries,
+                    retry_delay_s=checkpoint_io_retry_delay_s,
+                )
 
             torch.distributed.barrier()
 

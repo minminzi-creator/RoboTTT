@@ -14,6 +14,8 @@
 
 import logging
 import os
+import shutil
+import tempfile
 from typing import TYPE_CHECKING, Optional, Union
 
 from omegaconf.dictconfig import DictConfig
@@ -188,13 +190,34 @@ class SFTRunner:
                 checkpoint_root,
                 f"checkpoints/global_step_{self.global_step}",
             )
-        actor_save_path = os.path.join(base_output_dir, "actor")
-        os.makedirs(actor_save_path, exist_ok=True)
-        self.actor.save_checkpoint(actor_save_path, self.global_step).wait()
         if is_best and self.early_stop is not None:
+            actor_save_path = os.path.join(base_output_dir, "actor")
+            os.makedirs(actor_save_path, exist_ok=True)
+            self.actor.save_checkpoint(actor_save_path, self.global_step).wait()
             logger.info(
                 f"Saved best model (val_acc={self.early_stop.best_val_acc:.4f}) to {base_output_dir}"
             )
+            return
+
+        checkpoint_parent = os.path.dirname(base_output_dir)
+        os.makedirs(checkpoint_parent, exist_ok=True)
+        staging_dir = tempfile.mkdtemp(
+            prefix=f".{os.path.basename(base_output_dir)}.incomplete-",
+            dir=checkpoint_parent,
+        )
+        try:
+            actor_save_path = os.path.join(staging_dir, "actor")
+            os.makedirs(actor_save_path, exist_ok=True)
+            self.actor.save_checkpoint(actor_save_path, self.global_step).wait()
+            success_marker = os.path.join(staging_dir, "_SUCCESS")
+            with open(success_marker, "w", encoding="utf-8") as marker:
+                marker.write(f"global_step={self.global_step}\n")
+                marker.flush()
+                os.fsync(marker.fileno())
+            os.replace(staging_dir, base_output_dir)
+        except BaseException:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+            raise
 
     def set_max_steps(self) -> None:
         self.num_steps_per_epoch = self.actor.get_max_steps_per_epoch().wait()[0]
