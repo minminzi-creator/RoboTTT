@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+> This is the `robottt2.0` development branch. See the
+> **[RoboTTT 2.0 README](ROBOTTT.md)** for its architecture, changes from the
+> previous implementation, training/evaluation commands, and known limitations.
+
 <div align="center">
   <img src="https://github.com/RLinf/misc/raw/main/pic/logo_white.svg" alt="RLinf-logo" width="600"/>
 </div>

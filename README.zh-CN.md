@@ -1,3 +1,7 @@
+> [!IMPORTANT]
+> 当前为 `robottt2.0` 开发分支。有关相较旧版的架构变化、训练/评测命令和已知限制，
+> 请阅读 **[RoboTTT 2.0 README](ROBOTTT.md)**。
+
 <div align="center">
   <img src="https://github.com/RLinf/misc/raw/main/pic/logo_white.svg" alt="RLinf-logo" width="600"/>
 </div>
