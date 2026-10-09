@@ -750,6 +750,15 @@ class Robocasa365Env(gym.Env):
             raw_chunk_terminations.append(terminations)
             raw_chunk_truncations.append(truncations)
 
+            # Evaluation normally executes a complete policy chunk.  For
+            # success-terminated video evaluation, stop on the exact simulator
+            # step where every environment has completed the task instead of
+            # applying the unused tail of the predicted chunk.
+            if bool(self.cfg.get("stop_on_success", False)) and bool(
+                terminations.all()
+            ):
+                break
+
         chunk_rewards = torch.stack(chunk_rewards, dim=1)
         raw_chunk_terminations = torch.stack(raw_chunk_terminations, dim=1)
         raw_chunk_truncations = torch.stack(raw_chunk_truncations, dim=1)

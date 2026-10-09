@@ -965,6 +965,7 @@ class MultiStepRolloutWorker(Worker):
                 desc="Evaluating Rollout Epochs",
                 disable=(self._rank != 0),
             ):
+                stop_eval_epoch = False
                 for _ in range(self.n_eval_chunk_steps):
                     for stage_id in range(self.num_pipeline_stages):
                         env_output = await self.recv_from(
@@ -977,6 +978,16 @@ class MultiStepRolloutWorker(Worker):
                             merge_fn=self._merge_obs_batches,
                             infer_batch_size_fn=self._infer_env_batch_size,
                         ).async_wait()
+                        if (
+                            bool(self.cfg.env.eval.get("stop_on_success", False))
+                            and env_output.get("dones") is not None
+                        ):
+                            dones = env_output["dones"].bool()
+                            if dones.ndim == 1:
+                                dones = dones.unsqueeze(1)
+                            if bool(dones.any(dim=1).all()):
+                                stop_eval_epoch = True
+                                break
                         actions, _ = self._predict_rollout_actions(
                             env_output["obs"],
                             mode="eval",
@@ -997,6 +1008,9 @@ class MultiStepRolloutWorker(Worker):
                             async_op=True,
                             batch_size=self.eval_batch_size,
                         )
+
+                    if stop_eval_epoch:
+                        break
 
             if self.enable_offload:
                 self.offload_model()

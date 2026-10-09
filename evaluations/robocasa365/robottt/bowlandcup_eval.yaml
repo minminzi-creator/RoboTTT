@@ -31,6 +31,9 @@ env:
     rollout_epoch: 1
     auto_reset: false
     ignore_terminations: false
+    # Finish metrics and video on the exact simulator step where the full task
+    # succeeds. max_episode_steps remains a failure-only upper bound.
+    stop_on_success: true
     # BowlAndCup's registry horizon is 2400 simulator steps. Keep the fallback
     # at the same value so a registry lookup failure cannot shorten evaluation.
     episode_horizon_source: task_horizon
