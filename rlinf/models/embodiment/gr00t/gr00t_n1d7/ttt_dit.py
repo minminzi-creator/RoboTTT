@@ -1,301 +1,405 @@
-# Copyright 2026 The RLinf Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-
-"""RoboTTT's DiT: GR00T N1.7's action-head DiT with TTT layers along time.
-
-The upstream ``AlternateVLDiT`` attends *within* a single timestep: its
-self-attention sees the state/action tokens of one observation and its
-cross-attention sees the vision-language tokens of that same observation. This
-subclass inserts a TTT layer after every block so information also flows
-*across* timesteps, through fast weights rather than through attention over a
-growing history.
-
-Parameter names are inherited unchanged from ``AlternateVLDiT`` so a pretrained
-GR00T N1.7 checkpoint still loads; the TTT parameters are new keys that
-``from_pretrained`` reports as missing and leaves at their initialization.
-"""
-
-from __future__ import annotations
-
-from typing import Any, Optional
+# Copyright 2026 The RLinf Authors. SPDX-License-Identifier: Apache-2.0
+"""One model factory and explicit DiT implementation for training and evaluation."""
 
 import torch
-from gr00t.model.modules.dit import AlternateVLDiT, _sdpa_context
-from torch import nn
+import torch.nn.functional as F
+from torch import Tensor, nn
+from torch.utils.checkpoint import checkpoint
 
-from rlinf.models.embodiment.gr00t.gr00t_n1d7.ttt import (
-    TTTConfig,
-    TTTContext,
-    TTTTimeMixer,
-)
-from rlinf.utils.logging import get_logger
-
-logger = get_logger()
+from .flow import euler_sample, sample_path, sequence_loss
+from .ttt import FastState, FastWeightTTT, Memory, TTTConfig
 
 
-def resolve_ttt_config(
-    ttt_config: Any, hidden_size: int, num_heads: int
-) -> TTTConfig:
-    """Build a :class:`TTTConfig`, defaulting its width to the host model's."""
-    defaults = {"hidden_size": hidden_size, "num_heads": num_heads}
-    if isinstance(ttt_config, TTTConfig):
-        return ttt_config
-    if ttt_config is None:
-        return TTTConfig(**defaults)
-    overrides = {
-        key: value for key, value in dict(ttt_config).items() if value is not None
-    }
-    defaults.update(overrides)
-    return TTTConfig(**defaults)
+class RecurrentBlock(nn.Module):
+    """Preserve pretrained attention/FFN, insert TTT between their residuals."""
 
-
-def _nonempty_bool_mask(mask: torch.Tensor) -> torch.Tensor:
-    """Keep at least one unmasked key per row so SDPA softmax stays defined.
-
-    AlternateVLDiT splits VL tokens into image vs text. A row whose subset is
-    empty (all False) makes ``scaled_dot_product_attention`` return NaN, which
-    then poisons TTT fast weights and the rest of the DiT.
-    """
-    if mask.dtype != torch.bool:
-        mask = mask.bool()
-    empty = ~mask.any(dim=-1)
-    if not bool(empty.any()):
-        return mask
-    filled = mask.clone()
-    filled[empty, 0] = True
-    return filled
-
-
-def _attention_residual(
-    block: nn.Module,
-    hidden_states: torch.Tensor,
-    encoder_hidden_states: Optional[torch.Tensor],
-    encoder_attention_mask: Optional[torch.Tensor],
-    temb: Optional[torch.Tensor],
-) -> torch.Tensor:
-    """Run a ``BasicTransformerBlock`` through the attention residual only.
-
-    RoboTTT Eq. (3) adds the gated TTT output to the *attention* output, then
-    the feed-forward continues. The upstream block fuses Attn+FFN, so this
-    helper (and :func:`_feed_forward`) split it without changing Isaac-GR00T.
-    """
-    if block.norm_type == "ada_norm":
-        norm_hidden_states = block.norm1(hidden_states, temb)
-    else:
-        norm_hidden_states = block.norm1(hidden_states)
-    if block.pos_embed is not None:
-        norm_hidden_states = block.pos_embed(norm_hidden_states)
-    attn_mask = (
-        _nonempty_bool_mask(encoder_attention_mask)
-        if encoder_hidden_states is not None and encoder_attention_mask is not None
-        else None
-    )
-    with _sdpa_context():
-        attn_output = block.attn1(
-            norm_hidden_states,
-            encoder_hidden_states=encoder_hidden_states,
-            attention_mask=attn_mask,
-        )
-    if block.final_dropout:
-        attn_output = block.final_dropout(attn_output)
-    hidden_states = attn_output + hidden_states
-    if hidden_states.ndim == 4:
-        hidden_states = hidden_states.squeeze(1)
-    return hidden_states
-
-
-def _feed_forward(block: nn.Module, hidden_states: torch.Tensor) -> torch.Tensor:
-    """The feed-forward half of ``BasicTransformerBlock.forward``."""
-    norm_hidden_states = block.norm3(hidden_states)
-    ff_output = block.ff(norm_hidden_states)
-    hidden_states = ff_output + hidden_states
-    if hidden_states.ndim == 4:
-        hidden_states = hidden_states.squeeze(1)
-    return hidden_states
-
-
-def install_ttt_into_block_forward(
-    block: nn.Module,
-    mixer: TTTTimeMixer,
-    layer_id: int,
-    context_holder: Any,
-) -> None:
-    """Put Attn → TTT → FFN inside ``block.forward``.
-
-    FSDP wraps each ``BasicTransformerBlock`` and only all-gathers its
-    parameters when that module's ``forward`` runs. The TTT layer and gate are
-    therefore registered as children of the block (not of the mixer) so they
-    unshard together with AdaLN / attention.
-    """
-    gate_snapshot = None
-    installed_gate = getattr(block, "ttt_gate", None)
-    if installed_gate is not None:
-        if installed_gate.device.type == "meta":
-            gate_snapshot = torch.full(
-                tuple(installed_gate.shape),
-                float(mixer.config.gate_init),
-                dtype=torch.float32,
-                device="cpu",
-            )
-        else:
-            gate_snapshot = installed_gate.detach().cpu().float().clone()
-        block._ttt_gate_snapshot = gate_snapshot
-
-    def _restore_gate() -> None:
-        gate = getattr(block, "ttt_gate", None)
-        snap = getattr(block, "_ttt_gate_snapshot", None)
-        if (
-            gate is None
-            or snap is None
-            or getattr(block, "_ttt_gate_restored", False)
-        ):
-            return
-        if gate.device.type == "meta" or tuple(gate.shape) != tuple(snap.shape):
-            return
-        if gate._is_view():
-            # FSDP all-gathered view: inplace copy_ breaks autograd.
-            block._ttt_gate_restored = True
-            return
-        current = gate.detach().float()
-        abs_max = float(current.abs().amax()) if current.numel() else 0.0
-        block._ttt_gate_restored = True
-        if bool(torch.isfinite(current).all()) and abs_max <= 10.0:
-            return
-        logger.warning(
-            "TTT gate corrupted (abs_max=%s); restoring construction init.",
-            abs_max,
-        )
-        with torch.no_grad():
-            gate.copy_(snap.to(device=gate.device, dtype=gate.dtype))
-
-    def forward(
-        hidden_states,
-        attention_mask=None,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        temb=None,
-    ):
-        del attention_mask
-        _restore_gate()
-        hidden_states = _attention_residual(
-            block,
-            hidden_states,
-            encoder_hidden_states=encoder_hidden_states,
-            encoder_attention_mask=encoder_attention_mask,
-            temb=temb,
-        )
-        hidden_states = mixer.apply_layer(
-            layer_id,
-            hidden_states,
-            getattr(context_holder, "_ttt_context", None),
-            layer=getattr(block, "ttt_layer", None),
-            gate=getattr(block, "ttt_gate", None),
-        )
-        return _feed_forward(block, hidden_states)
-
-    block.forward = forward
-
-
-class TTTAlternateVLDiT(AlternateVLDiT):
-    """``AlternateVLDiT`` with a gated TTT layer after each attention residual."""
-
-    def __init__(self, *args, ttt_config: Any = None, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        self.ttt_config = resolve_ttt_config(
-            ttt_config, self.inner_dim, self.config.num_attention_heads
-        )
-        self.ttt = TTTTimeMixer(self.ttt_config, self.config.num_layers)
-        self._ttt_context: Optional[TTTContext] = None
-        layers = list(self.ttt.layers)
-        gates = list(self.ttt.gates)
-        # The mixer keeps ``num_layers`` for TTT state layout, but the actual
-        # parameters must live on the transformer block FSDP wraps.
-        self.ttt.layers = nn.ModuleList()
-        self.ttt.gates = nn.ParameterList()
-        for idx, block in enumerate(self.transformer_blocks):
-            block.add_module("ttt_layer", layers[idx])
-            block.register_parameter("ttt_gate", gates[idx])
-            install_ttt_into_block_forward(block, self.ttt, idx, self)
-
-    def restore_uninitialized_params_(self) -> None:
-        """Fix HF-uninitialized TTT weights before FSDP wrap."""
-        for block in self.transformer_blocks:
-            layer = getattr(block, "ttt_layer", None)
-            if layer is not None and hasattr(layer, "restore_uninitialized_params_"):
-                layer.restore_uninitialized_params_()
-            gate = getattr(block, "ttt_gate", None)
-            snap = getattr(block, "_ttt_gate_snapshot", None)
-            if not isinstance(gate, nn.Parameter) or not torch.is_tensor(snap):
-                continue
-            if gate.device.type == "meta" or gate._is_view():
-                continue
-            current = gate.detach().float()
-            abs_max = float(current.abs().amax()) if current.numel() else 0.0
-            block._ttt_gate_restored = True
-            if bool(torch.isfinite(current).all()) and abs_max <= 10.0:
-                continue
-            logger.warning(
-                "TTT gate corrupted (abs_max=%s); restoring construction init.",
-                abs_max,
-            )
-            with torch.no_grad():
-                gate.copy_(snap.to(device=gate.device, dtype=gate.dtype))
-
-    def unfreeze_ttt(self) -> None:
-        """Mark TTT layers/gates trainable after they were moved onto blocks."""
-        for block in self.transformer_blocks:
-            if hasattr(block, "ttt_layer"):
-                block.ttt_layer.requires_grad_(True)
-            gate = getattr(block, "ttt_gate", None)
-            if isinstance(gate, torch.nn.Parameter):
-                gate.requires_grad_(True)
+    def __init__(self, spatial: nn.Module, ttt_config: TTTConfig | None):
+        super().__init__()
+        self.spatial = spatial
+        self.ttt = FastWeightTTT(ttt_config) if ttt_config else None
 
     def forward(
         self,
-        hidden_states: torch.Tensor,
-        encoder_hidden_states: torch.Tensor,
-        timestep: Optional[torch.LongTensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        return_all_hidden_states: bool = False,
-        image_mask: Optional[torch.Tensor] = None,
-        backbone_attention_mask: Optional[torch.Tensor] = None,
-        ttt_context: Optional[TTTContext] = None,
-    ):
-        """Same contract as ``AlternateVLDiT.forward`` plus a TTT context.
+        hidden: Tensor,
+        encoder: Tensor | None,
+        mask: Tensor | None,
+        temb: Tensor,
+        state: FastState | None,
+        position: Tensor,
+        valid: Tensor,
+        reset: Tensor | None,
+    ) -> tuple[Tensor, FastState | None, Tensor]:
+        from gr00t.model.modules.dit import _sdpa_context
 
-        With ``ttt_context=None`` the TTT layers still run, but over a single
-        timestep starting from ``W_0``: that is the context-length-one
-        behaviour, which keeps upstream call sites working unchanged.
-
-        Computation per layer matches the paper: attention (within a timestep)
-        → gated TTT (across time) added to the attention residual → FFN.
-
-        TTT is installed *inside* each ``BasicTransformerBlock.forward`` so
-        FSDP unshards the block — including the TTT layer registered on it —
-        before AdaLN / attention / TTT see the weights.
-        """
-        self._ttt_context = ttt_context
-        try:
-            return super().forward(
-                hidden_states,
-                encoder_hidden_states,
-                timestep=timestep,
-                encoder_attention_mask=encoder_attention_mask,
-                return_all_hidden_states=return_all_hidden_states,
-                image_mask=image_mask,
-                backbone_attention_mask=backbone_attention_mask,
+        block = self.spatial
+        normed = (
+            block.norm1(hidden, temb)
+            if block.norm_type == "ada_norm"
+            else block.norm1(hidden)
+        )
+        if block.pos_embed is not None:
+            normed = block.pos_embed(normed)
+        with _sdpa_context():
+            attention = block.attn1(
+                normed, encoder_hidden_states=encoder, attention_mask=mask
             )
-        finally:
-            self._ttt_context = None
+        if block.final_dropout is not None:
+            attention = block.final_dropout(attention)
+        hidden = attention + hidden
+        update = hidden.new_zeros((), dtype=torch.float32)
+        if self.ttt is not None:
+            b, t = valid.shape
+            residual, state, update = self.ttt(
+                hidden.reshape(b, t, *hidden.shape[1:]), state, position, valid, reset
+            )
+            hidden = hidden + residual.flatten(0, 1)
+        return hidden + block.ff(block.norm3(hidden)), state, update
+
+
+class ExplicitDiT(nn.Module):
+    """Functional version of GR00T AlternateVLDiT; checkpointing cannot commit."""
+
+    def __init__(
+        self, source: nn.Module, ttt_config: TTTConfig | None, checkpoint_blocks: bool
+    ):
+        super().__init__()
+        if not source.config.interleave_self_attention:
+            raise ValueError(
+                "This reproduction requires the pretrained alternating VL DiT"
+            )
+        self.use_ttt = ttt_config is not None
+        self.checkpoint_blocks = checkpoint_blocks
+        self.attend_text_every_n_blocks = source.attend_text_every_n_blocks
+        self.transformer_blocks = nn.ModuleList(
+            [RecurrentBlock(block, ttt_config) for block in source.transformer_blocks]
+        )
+        for name in ("timestep_encoder", "norm_out", "proj_out_1", "proj_out_2"):
+            setattr(self, name, getattr(source, name))
+
+    def forward(
+        self,
+        hidden: Tensor,
+        encoder: Tensor,
+        timestep: Tensor,
+        image_mask: Tensor,
+        attention_mask: Tensor,
+        incoming: Memory | None,
+        valid: Tensor,
+        reset: Tensor | None = None,
+    ) -> tuple[Tensor, Memory | None, Tensor]:
+        b, _ = valid.shape
+        position = (
+            torch.zeros(b, device=hidden.device, dtype=torch.long)
+            if incoming is None
+            else incoming.position
+        )
+        if reset is not None:
+            position = torch.where(reset, 0, position)
+        temb = self.timestep_encoder(timestep)
+        image_mask, attention_mask = image_mask.bool(), attention_mask.bool()
+        masks = (image_mask & attention_mask, ~image_mask & attention_mask)
+        states, updates = [], []
+        for i, block in enumerate(self.transformer_blocks):
+            is_cross = i % 2 == 0
+            mask = (
+                masks[int(i % (2 * self.attend_text_every_n_blocks) == 0)]
+                if is_cross
+                else None
+            )
+            state = (
+                incoming.layers[i] if incoming is not None and self.use_ttt else None
+            )
+            args = (
+                hidden,
+                encoder if is_cross else None,
+                mask,
+                temb,
+                state,
+                position,
+                valid,
+                reset,
+            )
+            if self.checkpoint_blocks and self.training and torch.is_grad_enabled():
+                hidden, candidate, update = checkpoint(
+                    block, *args, use_reentrant=False
+                )
+            else:
+                hidden, candidate, update = block(*args)
+            if self.use_ttt:
+                states.append(candidate)
+            updates.append(update)
+        shift, scale = self.proj_out_1(F.silu(temb)).chunk(2, dim=1)
+        hidden = self.norm_out(hidden) * (1 + scale[:, None]) + shift[:, None]
+        memory = (
+            Memory(tuple(states), position + valid.long().sum(1))
+            if self.use_ttt
+            else None
+        )
+        return self.proj_out_2(hidden), memory, torch.stack(updates).mean()
+
+
+class SequencePolicy(nn.Module):
+    """GR00T with shared SFT / inference features and explicit memory ownership."""
+
+    def __init__(self, base: nn.Module, config: dict):
+        super().__init__()
+        self.base = base
+        self.settings = config
+        model_cfg = config["model"]
+        source = base.action_head.model
+        self.use_ttt = model_cfg["use_ttt"]
+        ttt_cfg = None
+        if self.use_ttt:
+            ttt_cfg = TTTConfig(**model_cfg["ttt"])
+            if ttt_cfg.hidden_size != source.inner_dim:
+                raise ValueError("TTT width must match the pretrained DiT")
+            expected = 1 + base.action_head.action_horizon + model_cfg["registers"]
+            if ttt_cfg.tokens_per_anchor != expected:
+                raise ValueError("TTT mini-batch must contain exactly one anchor")
+            self.registers = nn.Parameter(
+                torch.randn(1, model_cfg["registers"], source.inner_dim) * 0.02
+            )
+        elif model_cfg["registers"]:
+            raise ValueError("The baseline has no registers")
+        base.action_head.model = ExplicitDiT(
+            source, ttt_cfg, model_cfg["gradient_checkpointing"]
+        )
+        self.base.requires_grad_(True)
+
+    def initialize_memory(self, batch_size: int) -> Memory | None:
+        """Initialize unwrapped train/eval state with gradients to learned W0.
+
+        Under FSDP pass incoming=None to forward instead, so initialization
+        occurs while each owning block has its parameters unsharded.
+        """
+        if not self.use_ttt:
+            return None
+        blocks = self.base.action_head.model.transformer_blocks
+        if any(not isinstance(block, RecurrentBlock) for block in blocks):
+            raise RuntimeError("Under FSDP initialize via forward(incoming=None)")
+        states = tuple(block.ttt.initial_state(batch_size) for block in blocks)
+        return Memory(
+            states,
+            torch.zeros(batch_size, device=states[0].w1.device, dtype=torch.long),
+        )
+
+    def encode(self, batch: dict) -> tuple[dict, Tensor]:
+        backbone_input = self.base.backbone.prepare_input(batch)
+        output = self.base.backbone(backbone_input)
+        head = self.base.action_head
+        output = head.process_backbone_output(output)
+        state = batch["state"].reshape(batch["state"].shape[0], 1, -1)
+        state_features = head.state_encoder(state, batch["embodiment_id"])
+        if self.training and head.state_dropout_prob:
+            keep = (
+                torch.rand(state.shape[0], device=state.device)
+                >= head.state_dropout_prob
+            )
+            state_features = state_features * keep[:, None, None]
+        return output, state_features
+
+    def velocity(
+        self,
+        actions: Tensor,
+        buckets: Tensor,
+        embodiment: Tensor,
+        features: dict,
+        state_features: Tensor,
+        incoming: Memory | None,
+        valid: Tensor,
+        reset: Tensor | None = None,
+    ) -> tuple[Tensor, Memory | None, Tensor]:
+        head = self.base.action_head
+        encoded = head.action_encoder(actions, buckets, embodiment)
+        if head.config.add_pos_embed:
+            positions = torch.arange(encoded.shape[1], device=actions.device)
+            encoded = encoded + head.position_embedding(positions)[None]
+        tokens = [state_features, encoded]
+        if self.use_ttt:
+            tokens.insert(0, self.registers.expand(actions.shape[0], -1, -1))
+        hidden, candidate, update = head.model(
+            torch.cat(tokens, 1),
+            features["backbone_features"],
+            buckets,
+            features["image_mask"],
+            features["backbone_attention_mask"],
+            incoming,
+            valid,
+            reset,
+        )
+        prediction = head.action_decoder(hidden, embodiment)[:, -head.action_horizon :]
+        return prediction, candidate, update
+
+    def forward(self, batch: dict, incoming: Memory | None = None) -> dict:
+        valid = batch["anchor_valid"]
+        b, t = valid.shape
+        features, state_features = self.encode(batch)
+        actions = batch["action"].reshape(b, t, *batch["action"].shape[1:])
+        xt, target, buckets = sample_path(actions)
+        prediction, candidate, update = self.velocity(
+            xt.flatten(0, 1),
+            buckets.flatten(),
+            batch["embodiment_id"],
+            features,
+            state_features,
+            incoming,
+            valid,
+        )
+        loss = sequence_loss(
+            prediction.reshape_as(actions),
+            target,
+            batch["action_mask"].reshape_as(actions),
+            valid,
+            batch["supervision"],
+            batch["denominator"],
+        )
+        return {"loss": loss, "memory": candidate, "ttt_update_rms": update}
+
+    @torch.no_grad()
+    def predict(
+        self,
+        batch: dict,
+        incoming: Memory | None = None,
+        reset: Tensor | None = None,
+        noise: Tensor | None = None,
+        diagnostics: dict | None = None,
+    ) -> tuple[Tensor, Memory | None]:
+        features, state_features = self.encode(batch)
+        b = state_features.shape[0]
+        head = self.base.action_head
+        if noise is None:
+            noise = torch.randn(
+                b,
+                head.action_horizon,
+                head.action_dim,
+                device=state_features.device,
+                dtype=torch.float32,
+            )
+        valid = torch.ones(b, 1, device=noise.device, dtype=torch.bool)
+
+        if diagnostics is not None:
+            diagnostics["dit_forwards"] = 0
+
+        def field(x, bucket, state):
+            if diagnostics is not None:
+                diagnostics["dit_forwards"] += 1
+            prediction, candidate, _ = self.velocity(
+                x,
+                bucket,
+                batch["embodiment_id"],
+                features,
+                state_features,
+                state,
+                valid,
+                reset,
+            )
+            return prediction, candidate
+
+        settings = self.settings["inference"]
+        actions, candidate = euler_sample(
+            field,
+            noise,
+            incoming,
+            steps=settings["denoise_steps"],
+            write_source=settings["memory_write_source"]
+            if self.use_ttt
+            else "denoise_step",
+            write_index=settings["memory_write_denoise_index"] if self.use_ttt else -1,
+        )
+        return actions, candidate.detach() if candidate is not None else None
+
+
+def build_model(config: dict, policy_class=SequencePolicy) -> SequencePolicy:
+    """Load ALL base weights first, then initialize new modules normally in FP32."""
+    from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
+    from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7, Gr00tN1d7ActionHead
+    from gr00t.model.gr00t_n1d7.processing_gr00t_n1d7 import Gr00tN1d7DataCollator
+    from gr00t.model.modules.qwen3_backbone import Qwen3Backbone
+    from transformers import PreTrainedModel
+
+    class LocalGr00t(Gr00tN1d7):
+        """Explicit offline constructor; upstream dispatch hardcodes Hub names.
+
+        Same modules and parameter names as upstream, without patching global
+        from_pretrained methods or altering the configured backbone depth.
+        """
+
+        def __init__(self, config, backbone_path):
+            PreTrainedModel.__init__(self, config)
+            self.backbone = Qwen3Backbone(
+                model_name=backbone_path,
+                tune_llm=config.tune_llm,
+                tune_visual=config.tune_visual,
+                select_layer=config.select_layer,
+                reproject_vision=config.reproject_vision,
+                use_flash_attention=config.use_flash_attention,
+                load_bf16=False,
+                tune_top_llm_layers=config.tune_top_llm_layers,
+                trainable_params_fp32=True,
+                transformers_loading_kwargs={"local_files_only": True},
+            )
+            self.action_head = Gr00tN1d7ActionHead(config)
+            self.collator = Gr00tN1d7DataCollator(
+                model_name=backbone_path,
+                model_type=config.backbone_model_type,
+                transformers_loading_kwargs={"local_files_only": True},
+            )
+
+    cfg = Gr00tN1d7Config.from_pretrained(
+        config["model"]["base_path"], local_files_only=True
+    )
+    cfg.load_bf16 = False
+    cfg.backbone_trainable_params_fp32 = True
+    base, loading = LocalGr00t.from_pretrained(
+        config["model"]["base_path"],
+        config=cfg,
+        dtype=torch.float32,
+        backbone_path=config["model"]["backbone_path"],
+        local_files_only=True,
+        output_loading_info=True,
+    )
+    for key in ("missing_keys", "unexpected_keys", "mismatched_keys", "error_msgs"):
+        if loading.get(key):
+            raise RuntimeError(
+                f"Base checkpoint did not load exactly: {key}={loading[key]}"
+            )
+    base.float()
+    if config["model"]["disable_dropout"]:
+        for module in base.modules():
+            if isinstance(module, nn.Dropout):
+                module.p = 0.0
+    if config["model"]["gradient_checkpointing"]:
+        base.gradient_checkpointing_enable(
+            gradient_checkpointing_kwargs={"use_reentrant": False}
+        )
+    model = policy_class(base, config)
+    if any(p.dtype != torch.float32 for p in model.parameters()):
+        raise TypeError("Factory must retain FP32 master parameters")
+    return model
+
+
+def parameter_counts(model: nn.Module) -> dict:
+    result = {
+        "total": 0,
+        "trainable": 0,
+        "backbone": 0,
+        "action_head": 0,
+        "dit_spatial": 0,
+        "ttt": 0,
+        "registers": 0,
+    }
+    for name, parameter in model.named_parameters():
+        n = parameter.numel()
+        result["total"] += n
+        result["trainable"] += n if parameter.requires_grad else 0
+        if "backbone." in name:
+            result["backbone"] += n
+        if "action_head." in name:
+            result["action_head"] += n
+        if "action_head.model." in name and ".ttt." not in name:
+            result["dit_spatial"] += n
+        if ".ttt." in name:
+            result["ttt"] += n
+        if name == "registers":
+            result["registers"] += n
+    return result

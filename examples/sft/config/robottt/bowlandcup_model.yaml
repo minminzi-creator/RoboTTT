@@ -1,0 +1,8 @@
+# Shared local checkpoint paths and BowlAndCup adapter for SFT and eval.
+model_path: /mnt/public/guozhen/dev_robottt/GR00T-N1.7-realworld-pni
+backbone_model_path: /mnt/public/guozhen/models/Cosmos-Reason2-2B
+embodiment_tag: new_embodiment
+obs_converter_type: robocasa365
+action_dim: 12
+valid_action_dim: 12
+image_nums: 3

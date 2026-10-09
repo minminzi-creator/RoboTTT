@@ -1,0 +1,69 @@
+# Shared experiment overrides applied after model/gr00t_n1d7 and the existing
+# hybrid_engines/fsdp group. Keep both comparison groups on the same protocol.
+defaults:
+  - /robottt/bowlandcup_model@actor.model
+  - _self_
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+cluster:
+  num_nodes: 1
+  component_placement:
+    actor: all
+runner:
+  task_type: sft
+  logger:
+    project_name: robottt
+    logger_backends: [tensorboard]
+  max_epochs: -1
+  max_steps: 8000 # 30000
+  val_check_interval: -1
+  save_interval: 1000
+  resume_dir: null
+data:
+  train_data_paths: /home/xuzhexuan/project/data/pretrain/composite/BowlAndCup/20250715/lerobot
+  val_data_paths: null
+  expected_episodes: 104
+  num_workers: 2
+  prefetch_factor: 1
+  video_backend: torchcodec
+  robottt:
+    action_horizon: 40
+    stride: 8
+    max_anchors: 128
+actor:
+  group_name: ActorGroup
+  training_backend: fsdp
+  micro_batch_size: 1
+  global_batch_size: 8
+  seed: 42
+  cpu_threads: 4
+  compiler_cache_dir: /home/xuzhexuan/project/robottt_runs/compiler_cache/native
+  enable_offload: false
+  optim:
+    # Same global batch and full-parameter objective: retain peak LR. Preserve
+    # the previous 200/50000 warmup fraction as 120/30000; decay over 30K steps.
+    lr: 5.0e-05
+    adam_beta1: 0.9
+    adam_beta2: 0.95
+    adam_eps: 1.0e-08
+    weight_decay: 1.0e-05
+    clip_grad: 1.0
+    lr_scheduler: linear_warmup_cosine
+    lr_warmup_steps: 200 # 1000
+    total_training_steps: 8000 # 30000
+    fail_on_nonfinite: true
+  fsdp_config:
+    # Other FSDP options, including all-null mixed_precision and disabled
+    # GradScaler, are inherited from hybrid_engines/fsdp without duplication.
+    gradient_checkpointing: false
+    limit_all_gathers: true
+    use_orig_params: true
+    amp_autocast:
+      enabled: true
+    gradient_checkpointing_use_reentrant: false
+    cast_forward_inputs: false
+    cast_root_forward_inputs: false
+    save_full_model_weights: true

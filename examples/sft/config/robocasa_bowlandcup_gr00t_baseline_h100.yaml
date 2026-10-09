@@ -1,0 +1,11 @@
+defaults:
+  - model/gr00t_n1d7@actor.model
+  - hybrid_engines/fsdp@actor.fsdp_config
+  - robottt/bowlandcup_h100@_global_
+  - _self_
+  - override hydra/job_logging: stdout
+
+runner:
+  logger:
+    log_path: /home/xuzhexuan/project/robottt_runs/native_gr00t_baseline
+    experiment_name: gr00t_baseline

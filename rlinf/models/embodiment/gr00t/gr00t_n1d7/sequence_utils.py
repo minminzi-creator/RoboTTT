@@ -1,144 +1,143 @@
-# Copyright 2026 The RLinf Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright 2026 The RLinf Authors. SPDX-License-Identifier: Apache-2.0
+"""Configuration and checkpoint contracts shared by native SFT and rollout."""
 
-"""Helpers for batch-major ``[B * T, ...]`` GR00T sequence tensors."""
-
-from __future__ import annotations
-
-from typing import Any, Optional
+import hashlib
+import json
+import os
+import subprocess
+from pathlib import Path
 
 import torch
-
-# Fields that are flattened across images rather than the env batch, so they
-# need the same batch-major slicing as the rest of the sequence once the
-# collator has restored a leading ``[B * T]`` axis.
-_SEQUENCE_BATCH_KEYS = {
-    "state",
-    "state_mask",
-    "action",
-    "action_mask",
-    "embodiment_id",
-    "input_ids",
-    "attention_mask",
-    "pixel_values",
-    "image_grid_thw",
-    "image_sizes",
-    "loss_mask",
-}
+from omegaconf import DictConfig, OmegaConf
 
 
-def slice_batch_major(
-    batch: dict[str, Any],
-    t_start: int,
-    t_end: int,
-    num_timesteps: int,
-) -> dict[str, Any]:
-    """Take time range ``[t_start, t_end)`` from a batch-major sequence.
+def load_sft_config(
+    config: str | Path, overrides: list[str] | None = None
+) -> DictConfig:
+    """Compose an SFT YAML for offline audits using the training Hydra defaults.
 
-    Args:
-        batch: tensors laid out as ``[B * T, ...]``, plus optional ``[B, T]``
-            ``loss_mask``.
-        t_start, t_end: half-open timestep window.
-        num_timesteps: ``T`` of the incoming batch.
-
-    Returns:
-        A new dict whose tensors are ``[B * (t_end - t_start), ...]`` and whose
-        ``num_timesteps`` is the window length.
+    Accept a file path or a name under examples/sft/config. Call outside an
+    active Hydra application; train/eval entrypoints already compose their cfg.
     """
-    if t_end <= t_start:
-        raise ValueError(f"empty slice [{t_start}, {t_end})")
-    if t_start < 0 or t_end > num_timesteps:
-        raise ValueError(
-            f"slice [{t_start}, {t_end}) is outside [0, {num_timesteps})"
-        )
-    window = t_end - t_start
-    sliced: dict[str, Any] = {}
-    for key, value in batch.items():
-        if key == "num_timesteps":
-            continue
-        if not torch.is_tensor(value):
-            sliced[key] = value
-            continue
-        if key == "loss_mask" and value.ndim >= 2 and value.shape[-1] == num_timesteps:
-            sliced[key] = value[..., t_start:t_end]
-            continue
-        if key not in _SEQUENCE_BATCH_KEYS and value.shape[0] % num_timesteps != 0:
-            sliced[key] = value
-            continue
-        if value.shape[0] % num_timesteps != 0:
-            raise ValueError(
-                f"{key} leading dim {value.shape[0]} is not divisible by "
-                f"num_timesteps={num_timesteps}"
-            )
-        batch_size = value.shape[0] // num_timesteps
-        reshaped = value.reshape(batch_size, num_timesteps, *value.shape[1:])
-        sliced[key] = reshaped[:, t_start:t_end].reshape(
-            batch_size * window, *value.shape[1:]
-        )
-    sliced["num_timesteps"] = window
-    return sliced
+    from hydra import compose, initialize_config_dir
+
+    path = Path(config).expanduser()
+    if not path.is_file() and path.parent == Path("."):
+        path = Path(__file__).resolve().parents[5] / "examples/sft/config" / path
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with initialize_config_dir(
+        version_base="1.1", config_dir=str(path.resolve().parent)
+    ):
+        cfg = compose(config_name=path.stem, overrides=overrides or [])
+    OmegaConf.resolve(cfg)
+    return cfg
 
 
-def segment_bounds(num_timesteps: int, segment_length: int) -> list[tuple[int, int]]:
-    """Half-open ``[start, end)`` windows covering ``num_timesteps``."""
-    if segment_length <= 0:
-        raise ValueError(f"segment_length must be positive, got {segment_length}")
-    return [
-        (start, min(start + segment_length, num_timesteps))
-        for start in range(0, num_timesteps, segment_length)
+def plain(config):
+    return (
+        OmegaConf.to_container(config, resolve=True)
+        if OmegaConf.is_config(config)
+        else config
+    )
+
+
+def model_settings(config) -> dict:
+    """Resolve RLinf model fields without mutating the user configuration."""
+    config = plain(config)
+    head = config["rl_head_config"]
+    ttt = dict(head["ttt"])
+    registers = ttt.pop("num_register_tokens")
+    return {
+        "model": {
+            "base_path": config["model_path"],
+            "backbone_path": config["backbone_model_path"],
+            "use_ttt": head["use_ttt"],
+            "registers": registers,
+            "gradient_checkpointing": config.get("gradient_checkpointing", True),
+            "disable_dropout": head["disable_dropout"],
+            "ttt": ttt,
+        },
+        "inference": {
+            "denoise_steps": config["denoising_steps"],
+            "execute_horizon": config["num_action_chunks"],
+            "memory_write_source": config["memory_write_source"],
+            "memory_write_denoise_index": config["memory_write_denoise_index"],
+        },
+    }
+
+
+def dataset_settings(config) -> dict:
+    """Adapt the native SFT data schema to the deterministic sequence dataset."""
+    config = plain(config)
+    result = model_settings(config["actor"]["model"])
+    result["seed"] = config["actor"]["seed"]
+    result["data"] = dict(config["data"]["robottt"])
+    result["data"].update(
+        path=config["data"]["train_data_paths"],
+        video_backend=config["data"]["video_backend"],
+    )
+    return result
+
+
+def configure_runtime(cache_root: str, component: str, rank: int, threads: int = 4):
+    """Separate compiler writers and keep inner FP32 products free of TF32."""
+    cache = Path(cache_root) / component / str(rank)
+    cache.mkdir(parents=True, exist_ok=True)
+    os.environ["TORCHINDUCTOR_CACHE_DIR"] = str(cache)
+    os.environ["TORCHINDUCTOR_COMPILE_THREADS"] = str(threads)
+    torch.set_num_threads(threads)
+    torch.set_float32_matmul_precision("highest")
+
+
+def source_metadata() -> dict:
+    """Version the actual model, dataset, worker and FSDP integration source."""
+    root = Path(__file__).resolve().parents[5]
+    names = [
+        "rlinf/models/embodiment/gr00t/gr00t_n1d7/" + name
+        for name in (
+            "ttt.py",
+            "flow.py",
+            "ttt_dit.py",
+            "sequence_utils.py",
+            "gr00t_action_model.py",
+            "__init__.py",
+        )
+    ] + [
+        "rlinf/data/datasets/gr00t_n1d7/sequence_dataset.py",
+        "rlinf/data/datasets/gr00t_n1d7/dataloader.py",
+        "rlinf/workers/sft/fsdp_sft_worker.py",
+        "rlinf/workers/sft/fsdp_vla_sft_worker.py",
+        "rlinf/workers/sft/fsdp_vla_robottt_worker.py",
+        "examples/sft/train_vla_sft.py",
+        "rlinf/hybrid_engines/fsdp/fsdp_model_manager.py",
+        "rlinf/hybrid_engines/fsdp/strategy/fsdp.py",
+        "rlinf/hybrid_engines/fsdp/utils.py",
     ]
+    return {
+        "base_commit": subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip(),
+        "source_sha256": {
+            name: hashlib.sha256((root / name).read_bytes()).hexdigest()
+            for name in names
+        },
+        "torch": torch.__version__,
+    }
 
 
-def flatten_leading_bt(batch: dict[str, Any], batch_size: int, num_timesteps: int) -> dict[str, Any]:
-    """Reshape ``[B, T, ...]`` fields to batch-major ``[B * T, ...]``.
-
-    Used when a collator emits a time axis (online LeRobot chunk windows).
-    """
-    if num_timesteps <= 1:
-        return batch
-    flattened: dict[str, Any] = {}
-    for key, value in batch.items():
-        if key == "num_timesteps":
+def checkpoint_bundle(checkpoint: str | Path) -> tuple[Path, dict]:
+    """Locate portable metadata for native RLinf or archived acceptance weights."""
+    path = Path(checkpoint)
+    directory = path if path.is_dir() else path.parent
+    for candidate in (directory, directory.parent):
+        bundle = candidate / "processor_bundle.json"
+        if not bundle.is_file():
             continue
-        if key in {"task", "task_descriptions"} and isinstance(value, (list, tuple)):
-            if len(value) == batch_size:
-                flattened[key] = [item for item in value for _ in range(num_timesteps)]
-            else:
-                flattened[key] = value
-            continue
-        if torch.is_tensor(value):
-            if (
-                value.ndim >= 2
-                and value.shape[0] == batch_size
-                and value.shape[1] == num_timesteps
-            ):
-                flattened[key] = value.reshape(
-                    batch_size * num_timesteps, *value.shape[2:]
-                )
-            else:
-                flattened[key] = value
-            continue
-        if isinstance(value, dict):
-            flattened[key] = flatten_leading_bt(value, batch_size, num_timesteps)
-            continue
-        flattened[key] = value
-    flattened["num_timesteps"] = num_timesteps
-    return flattened
-
-
-def dones_to_reset_mask(dones: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
-    """Flatten env-done flags to a ``[B]`` boolean reset mask."""
-    if dones is None:
-        return None
-    return dones.reshape(-1).to(dtype=torch.bool)
+        metadata = candidate / "sequence_metadata.json"
+        if metadata.is_file():
+            return bundle, json.loads(metadata.read_text())
+        legacy = candidate / "metadata.json"
+        if legacy.is_file():
+            return bundle, json.loads(legacy.read_text())
+    raise FileNotFoundError(f"No sequence metadata / processor bundle beside {path}")

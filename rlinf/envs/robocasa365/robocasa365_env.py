@@ -35,6 +35,70 @@ from rlinf.envs.robocasa365.utils import (
 from rlinf.envs.utils import list_of_dict_to_dict_of_list, to_tensor
 
 
+def _ensure_robocasa_task_registered(task_name: str) -> None:
+    """Restore a RoboCasa task missing from robosuite's process-local registry."""
+    import importlib
+    import json
+    import sys
+    from importlib.metadata import distribution
+    from importlib.util import module_from_spec, spec_from_file_location
+    from pathlib import Path
+    from urllib.parse import unquote, urlparse
+
+    from robosuite.environments.base import (
+        REGISTERED_ENVS,  # type: ignore[import-not-found]
+    )
+
+    if task_name in REGISTERED_ENVS:
+        return
+
+    robocasa = importlib.import_module("robocasa")
+    if getattr(robocasa, "__file__", None) is None:
+        # Ray/cloudpickle can materialize the editable package as an empty
+        # namespace parent while deserializing robocasa submodules. Normal
+        # re-import still resolves to that namespace, so load the editable
+        # package's real __init__.py directly.
+        direct_url_text = distribution("robocasa").read_text("direct_url.json")
+        direct_url = json.loads(direct_url_text or "{}").get("url", "")
+        source_root = Path(unquote(urlparse(direct_url).path))
+        package_dir = source_root / "robocasa"
+        init_path = package_dir / "__init__.py"
+        if not init_path.is_file():
+            raise RuntimeError(
+                "Cannot locate the real RoboCasa package from its editable "
+                f"installation metadata: {init_path}."
+            )
+
+        spec = spec_from_file_location(
+            "robocasa",
+            init_path,
+            submodule_search_locations=[str(package_dir)],
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Cannot load the real RoboCasa package: {init_path}.")
+
+        # Remove the entire stale namespace tree. Keeping children such as
+        # robocasa.models in sys.modules prevents Python from attaching them to
+        # the newly loaded parent and breaks RoboCasa's package initialization.
+        for module_name in list(sys.modules):
+            if module_name == "robocasa" or module_name.startswith("robocasa."):
+                sys.modules.pop(module_name, None)
+
+        robocasa = module_from_spec(spec)
+        sys.modules["robocasa"] = robocasa
+        spec.loader.exec_module(robocasa)
+
+    task_cls = getattr(robocasa, task_name, None)
+    if task_cls is None:
+        raise RuntimeError(
+            f"RoboCasa task {task_name!r} is unavailable in {robocasa.__file__}."
+        )
+
+    # The robosuite registry is process-local and may have been initialized
+    # before the real RoboCasa package replaced the namespace placeholder.
+    REGISTERED_ENVS[task_name] = task_cls
+
+
 class Robocasa365Env(gym.Env):
     """Vectorized RLinf wrapper for the RoboCasa365 benchmark.
 
@@ -346,9 +410,9 @@ class Robocasa365Env(gym.Env):
                 extra_env_kwargs=env_kwargs,
                 split_name=env_split,
             ):
-                import robocasa  # noqa: F401 Robocasa must be imported to register envs
                 from robocasa.utils.env_utils import create_env
 
+                _ensure_robocasa_task_registered(spec["task_name"])
                 common_kwargs = {
                     "env_name": spec["task_name"],
                     "robots": robot,

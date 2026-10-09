@@ -20,43 +20,16 @@ from omegaconf import DictConfig, OmegaConf
 from rlinf.utils.logging import get_logger
 
 
-def _audit_runtime_model_shapes(model, cfg):
-    expected = {
-        "action_dim": int(cfg.action_dim),
-        "valid_action_dim": int(cfg.valid_action_dim),
-        "image_nums": int(cfg.image_nums),
-    }
-    observed = {
-        "model.action_dim": getattr(model, "action_dim", None),
-        "model.valid_action_dim": getattr(model, "valid_action_dim", None),
-        "model.image_nums": getattr(model, "image_nums", None),
-        "action_head.env_action_dim": getattr(
-            model.action_head, "env_action_dim", None
-        ),
-        "action_head.valid_action_dim": getattr(
-            model.action_head, "valid_action_dim", None
-        ),
-    }
-    expected_by_observed_name = {
-        "model.action_dim": expected["action_dim"],
-        "model.valid_action_dim": expected["valid_action_dim"],
-        "model.image_nums": expected["image_nums"],
-        "action_head.env_action_dim": expected["action_dim"],
-        "action_head.valid_action_dim": expected["valid_action_dim"],
-    }
-    mismatches = [
-        f"{name}={observed[name]!r} (expected {wanted})"
-        for name, wanted in expected_by_observed_name.items()
-        if observed[name] != wanted
-    ]
-    if mismatches:
-        raise ValueError(
-            "GR00T runtime shape audit failed: " + "; ".join(mismatches)
-        )
-    return expected
-
-
 def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
+    if cfg.get("sequence_training", False):
+        from .gr00t_action_model import GR00T_N1_7_SequencePolicy
+        from .sequence_utils import model_settings
+        from .ttt_dit import build_model
+
+        if torch_dtype != torch.float32:
+            raise ValueError("Sequence GR00T/RoboTTT requires FP32 master parameters")
+        return build_model(model_settings(cfg), policy_class=GR00T_N1_7_SequencePolicy)
+
     from gr00t.configs.model.gr00t_n1d7 import Gr00tN1d7Config
     from gr00t.model.gr00t_n1d7.gr00t_n1d7 import Gr00tN1d7
     from transformers import AutoConfig, AutoModel
@@ -114,17 +87,6 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
     if _action_dim is not None:
         config.action_dim = _action_dim
 
-    # Explicit embodiment-shape overrides.
-    # Useful when the checkpoint processor metadata belongs to another
-    # new_embodiment dataset, e.g. PNI -> RoboCasa PandaOmron.
-    _valid_action_dim = cfg.get("valid_action_dim")
-    if _valid_action_dim is not None:
-        config.valid_action_dim = int(_valid_action_dim)
-
-    _image_nums = cfg.get("image_nums")
-    if _image_nums is not None:
-        config.image_nums = int(_image_nums)
-
     backbone_model_path = OmegaConf.select(cfg, "backbone_model_path", default=None)
 
     model = GR00T_N1_7_ForRLActionPrediction.from_pretrained(
@@ -138,15 +100,6 @@ def get_model(cfg: DictConfig, torch_dtype=torch.bfloat16):
         output_action_chunks=cfg.num_action_chunks,
         obs_converter_type=cfg.obs_converter_type,
         rl_head_config=cfg.rl_head_config,
-    )
-
-    runtime_shapes = _audit_runtime_model_shapes(model, cfg)
-    logger.info(
-        "GR00T runtime shape audit passed: action_dim=%d, "
-        "valid_action_dim=%d, image_nums=%d",
-        runtime_shapes["action_dim"],
-        runtime_shapes["valid_action_dim"],
-        runtime_shapes["image_nums"],
     )
 
     model.to(torch_dtype)

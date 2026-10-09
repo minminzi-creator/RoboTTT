@@ -1,517 +1,332 @@
-# Copyright 2026 The RLinf Authors.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     https://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Copyright 2026 The RLinf Authors. SPDX-License-Identifier: Apache-2.0
+"""Episode-equal deterministic windows with real 40-frame action supervision."""
 
-"""Sequence SFT dataset for GR00T N1.7 RoboTTT.
-
-The upstream GR00T factory only emits single-step samples. RoboTTT needs a
-contiguous window of ``T`` steps so the TTT inner loop can walk the
-trajectory. This dataset reuses ``LeRobotEpisodeLoader``,
-``extract_step_data`` and ``Gr00tN1d7Processor`` to assemble those windows,
-and the collator flattens them to ``[B * T, ...]`` in batch-major order.
-"""
-
-from __future__ import annotations
-
-import importlib.util
+import hashlib
+import inspect
 import json
-from dataclasses import replace
+import random
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
-from torch.utils.data.distributed import DistributedSampler
-from torchdata.stateful_dataloader import StatefulDataLoader
+from torch.utils.data import Dataset, Sampler
 
-from rlinf.models.embodiment.gr00t.gr00t_n1d7.gr00t_action_model import (
-    _batchify_gr00t_forward_input,
-    _find_processor_dir,
-    redirect_qwen3_backbone_to_local,
-)
-from rlinf.utils.logging import get_logger
-
-logger = get_logger()
-
-_DEFAULT_BACKBONE_MODEL_NAME = "nvidia/Cosmos-Reason2-2B"
-
-_EMBODIMENT_TAG_BY_CFG = {
-    "libero_sim": "libero_sim",
-    "libero_panda": "libero_panda",
-    "libero_franka": "libero_franka",
-    "isaaclab_franka": "isaaclab_franka",
-    "maniskill_widowx": "maniskill_widowx",
-    "robocasa_panda_omron": "robocasa_panda_omron",
-    "gr1": "gr1",
-    "behavior_r1_pro": "behavior_r1_pro",
-    "new_embodiment": "new_embodiment",
-    "so101": "new_embodiment",
-    "so100": "new_embodiment",
-}
+CAMERAS = ["robot0_agentview_left", "robot0_agentview_right", "robot0_eye_in_hand"]
+STATE_KEYS = [
+    "base_position",
+    "base_rotation",
+    "end_effector_position_relative",
+    "end_effector_rotation_relative",
+    "gripper_qpos",
+]
+ACTION_KEYS = [
+    "base_motion",
+    "control_mode",
+    "end_effector_position",
+    "end_effector_rotation",
+    "gripper_close",
+]
+LANGUAGE_KEY = "annotation.human.task_description"
 
 
-def _resolve_backbone_model_path(backbone_model_path: Optional[str]) -> Optional[str]:
-    if backbone_model_path is None:
-        return None
-    resolved = str(Path(backbone_model_path).expanduser().resolve())
-    if not Path(resolved).is_dir():
-        raise FileNotFoundError(f"Backbone model path does not exist: {resolved}")
-    return resolved
+def modality_dict(horizon: int = 40) -> dict:
+    return {
+        "video": {"delta_indices": [0], "modality_keys": CAMERAS},
+        "state": {"delta_indices": [0], "modality_keys": STATE_KEYS},
+        "action": {"delta_indices": list(range(horizon)), "modality_keys": ACTION_KEYS},
+        "language": {"delta_indices": [0], "modality_keys": [LANGUAGE_KEY]},
+    }
 
 
-
-def _load_external_modality_config(
-    config_path: str,
-    config_name: Optional[str] = None,
-):
-    """Load a ModalityConfig dictionary from an external Python file."""
-    path = Path(config_path).expanduser().resolve()
-    if not path.is_file():
-        raise FileNotFoundError(f"Modality config file does not exist: {path}")
-
-    spec = importlib.util.spec_from_file_location(
-        f"_rlinf_modality_{path.stem}",
-        str(path),
+def sample_seed(seed: int, epoch: int, episode: int, purpose: int = 0) -> int:
+    return int(
+        np.random.SeedSequence([seed, epoch, episode, purpose]).generate_state(1)[0]
     )
-    if spec is None or spec.loader is None:
-        raise ImportError(f"Cannot import modality config from {path}")
 
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
 
-    if config_name is not None:
-        if not hasattr(module, config_name):
-            raise AttributeError(
-                f"{path} has no modality config named {config_name}"
-            )
-        cfg = getattr(module, config_name)
-    else:
-        candidates = []
-        for name, value in vars(module).items():
-            if (
-                isinstance(value, dict)
-                and all(k in value for k in ("video", "state", "action", "language"))
-            ):
-                candidates.append((name, value))
-
-        if len(candidates) != 1:
-            raise ValueError(
-                f"Expected exactly one modality config in {path}, "
-                f"found {[name for name, _ in candidates]}. "
-                "Set robottt.modality_config_name explicitly."
-            )
-
-        config_name, cfg = candidates[0]
-
-    logger.info(
-        "Loaded external modality config %s from %s",
-        config_name,
-        path,
-    )
-    return cfg
-
-def _load_processor(model_path: str, backbone_model_path: Optional[str] = None):
-    from gr00t.model.gr00t_n1d7.processing_gr00t_n1d7 import Gr00tN1d7Processor
-
-    processor_dir = _find_processor_dir(Path(model_path))
-    if processor_dir is None:
-        raise FileNotFoundError(
-            f"No GR00T N1.7 processor files under {model_path}. "
-            "Expected processor_config.json, statistics.json, embodiment_id.json."
+def window_indices(
+    length: int,
+    episode: int,
+    epoch: int,
+    seed: int,
+    stride: int = 8,
+    maximum: int = 128,
+    horizon: int = 40,
+) -> np.ndarray:
+    valid = min(maximum, (length - horizon) // stride + 1)
+    if valid < 1:
+        raise ValueError(
+            f"Episode {episode} has {length} frames, shorter than horizon {horizon}"
         )
-    with open(processor_dir / "processor_config.json", "r") as f:
-        processor_cfg = json.load(f)["processor_kwargs"]
-    with open(processor_dir / "statistics.json", "r") as f:
-        processor_cfg["statistics"] = json.load(f)
-    with open(processor_dir / "embodiment_id.json", "r") as f:
-        processor_cfg["embodiment_id_mapping"] = json.load(f)
-    resolved_backbone = _resolve_backbone_model_path(backbone_model_path)
-    if resolved_backbone is not None:
-        processor_cfg.setdefault("transformers_loading_kwargs", {})
-        processor_cfg["transformers_loading_kwargs"]["local_files_only"] = True
-        logger.info(
-            "Loading processor backbone locally from %s (canonical model_name=%s)",
-            resolved_backbone,
-            processor_cfg.get("model_name", _DEFAULT_BACKBONE_MODEL_NAME),
-        )
-    canonical_name = str(
-        processor_cfg.get("model_name", _DEFAULT_BACKBONE_MODEL_NAME)
+    last_start = length - horizon - (valid - 1) * stride
+    start = np.random.default_rng(sample_seed(seed, epoch, episode)).integers(
+        last_start + 1
     )
-    with redirect_qwen3_backbone_to_local(canonical_name, resolved_backbone):
-        processor = Gr00tN1d7Processor(**processor_cfg)
-    processor.training = True
-    return processor
+    return start + np.arange(valid, dtype=np.int64) * stride
 
 
-def _resolve_embodiment_tag(tag_name: str):
-    from rlinf.models.embodiment.gr00t.embodiment_tags import EmbodimentTag
-
-    mapped = _EMBODIMENT_TAG_BY_CFG.get(tag_name, tag_name)
-    return EmbodimentTag(mapped)
-
-
-class Gr00tN1d7SequenceDataset(Dataset):
-    """Sample contiguous ``T``-step sub-trajectories from a LeRobot dataset.
-
-    Optionally prepends a human-video context segment (loss-masked) when
-    ``human_video_path`` points at a paired LeRobot dataset. The human segment
-    uses placeholder actions so TTT still updates, but no imitation loss is
-    applied.
-    """
+class EpisodeSampler(Sampler):
+    """One shared permutation, exact rank sharding; no implicit duplicate padding."""
 
     def __init__(
         self,
-        dataset_path: str,
-        processor: Any,
-        embodiment_tag: Any,
-        num_timesteps: int = 16,
-        timestep_stride: int = 1,
-        seed: int = 0,
-        video_backend: str = "torchcodec",
-        human_video_path: Optional[str] = None,
-        human_video_timesteps: int = 0,
-        samples_per_epoch: Optional[int] = None,
+        size: int,
+        seed: int,
+        epoch: int,
+        rank: int,
+        world_size: int,
+        skip_global: int = 0,
     ):
-        from gr00t.data.dataset.lerobot_episode_loader import LeRobotEpisodeLoader
+        if size % world_size or skip_global % world_size:
+            raise ValueError("Episode count and resume offset must divide world size")
+        self.size, self.seed, self.rank, self.world_size = size, seed, rank, world_size
+        self.skip_global = skip_global
+        self.set_epoch(epoch)
 
-        self.processor = processor
-        self.embodiment_tag = embodiment_tag
-        self.num_timesteps = int(num_timesteps)
-        self.timestep_stride = int(timestep_stride)
-        if self.timestep_stride <= 0:
-            raise ValueError(
-                f"timestep_stride must be positive, got {self.timestep_stride}"
-            )
-        self.human_video_timesteps = int(human_video_timesteps)
-        self.seed = int(seed)
-
-        tag_value = embodiment_tag.value
-        if tag_value not in processor.modality_configs:
-            raise KeyError(
-                f"Processor has no modality config for {tag_value}; "
-                f"available: {list(processor.modality_configs)}"
-            )
-        self.modality_configs = processor.modality_configs[tag_value]
-        self.action_horizon = len(self.modality_configs["action"].delta_indices)
-
-        self.loader = LeRobotEpisodeLoader(
-            dataset_path=dataset_path,
-            modality_configs=self.modality_configs,
-            video_backend=video_backend,
+    def set_epoch(self, epoch: int):
+        self.epoch = epoch
+        order = np.random.default_rng(sample_seed(self.seed, epoch, 0, 1)).permutation(
+            self.size
         )
-        self._index = self._build_index(self.loader, self.num_timesteps)
-        if not self._index:
-            raise ValueError(
-                f"No episode in {dataset_path} is long enough for "
-                f"num_timesteps={self.num_timesteps} with action_horizon="
-                f"{self.action_horizon}."
-            )
-        self.samples_per_epoch = (
-            int(samples_per_epoch) if samples_per_epoch is not None else len(self._index)
-        )
+        self.indices = [
+            (epoch, int(i))
+            for i in order[self.skip_global :][self.rank :: self.world_size]
+        ]
 
-        self.human_loader = None
-        self._human_rows: dict[int, list[tuple[int, int, int]]] = {}
-        if human_video_path and self.human_video_timesteps > 0:
-            self.human_loader = LeRobotEpisodeLoader(
-                dataset_path=human_video_path,
-                modality_configs=self.modality_configs,
-                video_backend=video_backend,
-            )
-            human_index = self._build_index(
-                self.human_loader, self.human_video_timesteps
-            )
-            if not human_index:
-                raise ValueError(
-                    f"No episode in {human_video_path} is long enough for "
-                    f"human_video_timesteps={self.human_video_timesteps} with "
-                    f"action_horizon={self.action_horizon}."
-                )
-            human_by_id: dict[int, list[tuple[int, int, int]]] = {}
-            for row in human_index:
-                human_by_id.setdefault(row[0], []).append(row)
-            # Pair by episode id when both datasets share ids; otherwise by order
-            # so every robot window has a human prefix of fixed length T_h.
-            n_id_matches = 0
-            for i, (robot_ep, _, _) in enumerate(self._index):
-                if robot_ep in human_by_id:
-                    self._human_rows[robot_ep] = human_by_id[robot_ep]
-                    n_id_matches += 1
-                else:
-                    self._human_rows[robot_ep] = [human_index[i % len(human_index)]]
-            if n_id_matches == 0:
-                logger.warning(
-                    "human_video_path=%s has no episode ids overlapping the "
-                    "robot dataset; pairing human videos by order.",
-                    human_video_path,
-                )
-            elif n_id_matches < len(self._index):
-                logger.warning(
-                    "human_video_path=%s matched %d/%d robot episodes by id; "
-                    "the rest are paired by order so collated windows stay "
-                    "length T_h + T.",
-                    human_video_path,
-                    n_id_matches,
-                    len(self._index),
-                )
+    def state_dict(self):
+        # The sampler owns epoch/order; its iterator separately owns the cursor.
+        # StatefulDataLoader snapshots both at its consumed-batch boundary.
+        return {"epoch": self.epoch, "skip_global": self.skip_global}
 
-    def _build_index(self, loader, num_timesteps: int) -> list[tuple[int, int, int]]:
-        """Enumerate every valid ``(episode_id, start, length)`` window.
+    def load_state_dict(self, state):
+        self.skip_global = state["skip_global"]
+        self.set_epoch(state["epoch"])
 
-        The returned index is consumed directly by ``DistributedSampler``.
-        Enumerating starts is important: randomly resampling inside
-        ``__getitem__`` discards the sampler index and clones the same private
-        NumPy RNG into every dataloader worker, which makes workers emit
-        duplicate windows.
-        """
-        index = []
-        for episode_id, length in enumerate(loader.episode_lengths):
-            # Last step of the window is start+T-1 and still needs H action
-            # frames, so start <= length - H - T + 1. Zero is a legal single
-            # window at the start of the episode; negative means too short.
-            max_start = (
-                int(length)
-                - self.action_horizon
-                - (num_timesteps - 1) * self.timestep_stride
-            )
-            if max_start >= 0:
-                index.extend(
-                    (episode_id, start, int(length))
-                    for start in range(max_start + 1)
-                )
+    def __len__(self):
+        return len(self.indices)
+
+    def __iter__(self):
+        return _EpisodeIterator(self.indices)
+
+
+class _EpisodeIterator:
+    """Checkpoint a cursor without making a fresh epoch inherit an old cursor."""
+
+    def __init__(self, indices: list[tuple[int, int]]):
+        self.indices = tuple(indices)
+        self.cursor = 0
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> tuple[int, int]:
+        if self.cursor == len(self.indices):
+            raise StopIteration
+        index = self.indices[self.cursor]
+        self.cursor += 1
         return index
 
-    def __len__(self) -> int:
-        return self.samples_per_epoch
+    def state_dict(self) -> dict:
+        return {"cursor": self.cursor}
 
-    def _process_step(self, episode_data, step_index: int, *, mask_loss: bool) -> dict:
-        from gr00t.data.dataset.sharded_single_step_dataset import extract_step_data
+    def load_state_dict(self, state: dict) -> None:
+        cursor = state["cursor"]
+        if not isinstance(cursor, int) or not 0 <= cursor <= len(self.indices):
+            raise ValueError("Invalid episode iterator cursor")
+        self.cursor = cursor
 
-        step = extract_step_data(
-            episode_data,
-            step_index,
-            self.modality_configs,
-            self.embodiment_tag,
-            allow_padding=True,
-        )
-        if mask_loss:
-            zero_actions = {
-                key: np.zeros_like(value) for key, value in step.actions.items()
-            }
-            step = replace(step, actions=zero_actions, is_demonstration=True)
-        processed = self.processor([{"content": step}])
-        return processed
 
-    def _load_window(self, loader, index_row, num_timesteps: int, *, mask_loss: bool):
-        episode_id, start, _ = index_row
-        episode_data = loader[episode_id]
-        steps = [
-            self._process_step(
-                episode_data,
-                start + t * self.timestep_stride,
-                mask_loss=mask_loss,
-            )
-            for t in range(num_timesteps)
+@contextmanager
+def deterministic_augmentation(seed: int, processor):
+    """An item's augmentation is independent of worker count and prefetch history."""
+    py_state, np_state = random.getstate(), np.random.get_state()
+    with torch.random.fork_rng(devices=[]):
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.random.default_generator.manual_seed(seed)
+        if hasattr(processor.train_image_transform, "set_random_seed"):
+            processor.train_image_transform.set_random_seed(seed)
+        try:
+            yield
+        finally:
+            random.setstate(py_state)
+            np.random.set_state(np_state)
+
+
+def build_processor(config: dict, bundle_path: str | None = None):
+    """The ONLY processor factory used by dataset, eval and replay diagnostics."""
+    from gr00t.data.dataset.lerobot_episode_loader import LeRobotEpisodeLoader
+    from gr00t.data.types import ModalityConfig
+    from gr00t.model.gr00t_n1d7.processing_gr00t_n1d7 import Gr00tN1d7Processor
+
+    loader = None
+    if bundle_path:
+        kwargs = json.loads(Path(bundle_path).read_text())
+    else:
+        base = Path(config["model"]["base_path"])
+        if (base / "processor").is_dir():
+            base /= "processor"
+        kwargs = json.loads((base / "processor_config.json").read_text())[
+            "processor_kwargs"
         ]
-        loss_mask = np.zeros(num_timesteps, dtype=np.float32) if mask_loss else np.ones(
-            num_timesteps, dtype=np.float32
+        modality = modality_dict(config["data"]["action_horizon"])
+        loader = LeRobotEpisodeLoader(
+            config["data"]["path"],
+            {k: ModalityConfig(**v) for k, v in modality.items()},
+            video_backend=config["data"]["video_backend"],
         )
-        return steps, loss_mask
+        kwargs["modality_configs"] = {"new_embodiment": modality}
+        kwargs["statistics"] = {"new_embodiment": loader.get_dataset_statistics()}
+        kwargs["embodiment_id_mapping"] = {"new_embodiment": 10}
+    kwargs["model_name"] = config["model"]["backbone_path"]
+    kwargs["transformers_loading_kwargs"] = {"local_files_only": True}
+    for name, parameter in inspect.signature(
+        Gr00tN1d7Processor.__init__
+    ).parameters.items():
+        if name != "self" and parameter.default is not inspect.Parameter.empty:
+            kwargs.setdefault(name, parameter.default)
+    processor = Gr00tN1d7Processor(**kwargs)
+    return processor, loader, kwargs
 
-    def __getitem__(self, index: int) -> dict[str, Any]:
-        robot_row = self._index[int(index) % len(self._index)]
-        robot_steps, robot_mask = self._load_window(
-            self.loader, robot_row, self.num_timesteps, mask_loss=False
+
+class EpisodeDataset(Dataset):
+    def __init__(self, config: dict, processor, loader):
+        self.config = config
+        self.processor = processor
+        self.loader = loader
+        self.episode_ids = [r["episode_index"] for r in loader.episodes_metadata]
+
+    def __len__(self):
+        return len(self.episode_ids)
+
+    def describe(self, index: tuple[int, int]) -> dict:
+        epoch, row = index
+        cfg = self.config["data"]
+        episode = self.episode_ids[row]
+        anchors = window_indices(
+            self.loader.episode_lengths[row],
+            episode,
+            epoch,
+            self.config["seed"],
+            cfg["stride"],
+            cfg["max_anchors"],
+            cfg["action_horizon"],
         )
-
-        context_steps: list[dict[str, Any]] = []
-        context_mask = np.zeros((0,), dtype=np.float32)
-        episode_id = robot_row[0]
-        if self.human_loader is not None:
-            human_rows = self._human_rows[episode_id]
-            human_row = human_rows[int(index) % len(human_rows)]
-            try:
-                context_steps, context_mask = self._load_window(
-                    self.human_loader,
-                    human_row,
-                    self.human_video_timesteps,
-                    mask_loss=True,
-                )
-            except (KeyError, AssertionError, ValueError) as exc:
-                logger.warning(
-                    "Retrying human-video context for episode %s: %s",
-                    episode_id,
-                    exc,
-                )
-                # Fall back to any valid human row so the collated length stays T_h + T.
-                fallback_rows = self._human_rows[next(iter(self._human_rows))]
-                fallback = fallback_rows[int(index) % len(fallback_rows)]
-                context_steps, context_mask = self._load_window(
-                    self.human_loader,
-                    fallback,
-                    self.human_video_timesteps,
-                    mask_loss=True,
-                )
-
         return {
-            "steps": context_steps + robot_steps,
-            "loss_mask": np.concatenate([context_mask, robot_mask], axis=0),
+            "epoch": epoch,
+            "row": row,
+            "episode": episode,
+            "anchors": anchors.tolist(),
+            "valid": len(anchors),
+            "augmentation_seed": sample_seed(self.config["seed"], epoch, episode, 2),
+        }
+
+    def __getitem__(self, index: tuple[int, int] | int) -> dict:
+        from gr00t.data.dataset.sharded_single_step_dataset import extract_step_data
+        from gr00t.data.embodiment_tags import EmbodimentTag
+
+        if isinstance(index, int):
+            index = (0, index)
+        description = self.describe(index)
+        modality = self.processor.modality_configs["new_embodiment"]
+        maximum = self.config["data"]["max_anchors"]
+        with deterministic_augmentation(
+            description["augmentation_seed"], self.processor
+        ):
+            episode = self.loader[index[1]]
+            if len(episode) != self.loader.episode_lengths[index[1]]:
+                raise ValueError("Metadata and decoded episode length differ")
+            steps = []
+            for anchor in description["anchors"]:
+                content = extract_step_data(
+                    episode,
+                    anchor,
+                    modality,
+                    EmbodimentTag.NEW_EMBODIMENT,
+                    allow_padding=False,
+                )
+                step = self.processor([{"content": content}])
+                if (
+                    tuple(step["action"].shape) != (40, 132)
+                    or step["action_mask"][:, :12].sum() != 480
+                ):
+                    raise ValueError(
+                        "Every valid anchor must supervise all 40 x 12 action values"
+                    )
+                steps.append(step)
+        n = len(steps)
+        # Duplicate processed payload only to keep collective shapes identical.
+        # Separate masks prevent this payload from affecting loss/state/position.
+        steps.extend([steps[-1]] * (maximum - n))
+        valid = torch.arange(maximum) < n
+        return {
+            "steps": steps,
+            "anchor_valid": valid,
+            "supervision": valid.clone(),
+            "description": description,
         }
 
 
-class Gr00tN1d7SequenceCollator:
-    """Collate B windows into a ``[B * T, ...]`` batch plus ``num_timesteps``."""
+class SequenceCollator:
+    def __init__(self, processor):
+        self.collator = processor.collator
 
-    def __init__(self, model_name: str, transformers_loading_kwargs: Optional[dict] = None):
-        from gr00t.model.gr00t_n1d7.processing_gr00t_n1d7 import Gr00tN1d7DataCollator
-
-        self._collator = Gr00tN1d7DataCollator(
-            model_name=model_name,
-            transformers_loading_kwargs=transformers_loading_kwargs or {},
+    def __call__(self, samples: list[dict]) -> dict:
+        b, t = len(samples), len(samples[0]["steps"])
+        output = dict(
+            self.collator([s for sample in samples for s in sample["steps"]])["inputs"]
         )
-
-    def __call__(self, samples: list[dict[str, Any]]) -> dict[str, Any]:
-        num_timesteps = len(samples[0]["steps"])
-        for sample in samples:
-            if len(sample["steps"]) != num_timesteps:
-                raise ValueError(
-                    "All windows in a batch must share the same length; "
-                    f"got {len(sample['steps'])} vs {num_timesteps}."
-                )
-        # Batch-major flatten: sample 0's T steps, then sample 1's, ...
-        flat_steps = [step for sample in samples for step in sample["steps"]]
-        collated = self._collator(flat_steps)
-        batch = dict(collated["inputs"] if "inputs" in collated else collated)
-        batch_size = len(samples) * num_timesteps
-        for key in ("pixel_values", "image_grid_thw", "image_sizes"):
-            if key in batch:
-                batch[key] = _batchify_gr00t_forward_input(key, batch[key], batch_size)
-        batch["loss_mask"] = torch.from_numpy(
-            np.stack([sample["loss_mask"] for sample in samples])
+        # Make flattened Qwen image patches sliceable along the anchor dimension.
+        for key in ("pixel_values", "image_grid_thw"):
+            tensor = output[key]
+            if tensor.shape[0] % (b * t):
+                raise ValueError(f"{key} cannot be divided into aligned observations")
+            output[key] = tensor.reshape(b * t, -1, *tensor.shape[1:])
+        output["anchor_valid"] = torch.stack([x["anchor_valid"] for x in samples])
+        output["supervision"] = torch.stack([x["supervision"] for x in samples])
+        output["denominator"] = (
+            (output["anchor_valid"] & output["supervision"]).sum(1).float()
         )
-        batch["num_timesteps"] = num_timesteps
-        return batch
+        output["descriptions"] = [x["description"] for x in samples]
+        return output
 
 
-def build_gr00t_n1d7_sft_dataloader(
-    cfg,
-    world_size: int,
-    rank: int,
-    data_paths,
-    eval_dataset: bool = False,
-):
-    """Build the GR00T N1.7 sequence SFT dataloader."""
-    from rlinf.utils.patcher import Patcher
+def segment_batch(batch: dict, start: int, end: int, device: torch.device) -> dict:
+    b, t = batch["anchor_valid"].shape
+    output = {}
+    for key, value in batch.items():
+        if not isinstance(value, torch.Tensor):
+            continue
+        if key in {"anchor_valid", "supervision"}:
+            value = value[:, start:end]
+        elif key != "denominator":
+            value = value.reshape(b, t, *value.shape[1:])[:, start:end].flatten(0, 1)
+            if key in {"pixel_values", "image_grid_thw"}:
+                value = value.flatten(0, 1)
+        output[key] = value.to(device, non_blocking=True)
+    return output
 
-    Patcher.clear()
-    Patcher.add_patch(
-        "gr00t.data.embodiment_tags.EmbodimentTag",
-        "rlinf.models.embodiment.gr00t.embodiment_tags.EmbodimentTag",
-    )
-    Patcher.apply()
 
-    model_cfg = cfg.actor.model
-    data_cfg = cfg.data
-    dataset_path = data_paths if isinstance(data_paths, str) else data_paths[0]
-    backbone_model_path = _resolve_backbone_model_path(
-        model_cfg.get("backbone_model_path", None)
-    )
-    processor = _load_processor(
-        str(model_cfg.model_path),
-        backbone_model_path=backbone_model_path,
-    )
-    embodiment_tag = _resolve_embodiment_tag(str(model_cfg.embodiment_tag))
-    robottt_cfg = data_cfg.get("robottt", {}) or {}
-
-    modality_config_path = robottt_cfg.get("modality_config_path", None)
-    if modality_config_path:
-        custom_modality_cfg = _load_external_modality_config(
-            str(modality_config_path),
-            config_name=robottt_cfg.get("modality_config_name", None),
-        )
-        tag_value = embodiment_tag.value
-
-        # Processor and StateActionProcessor keep separate copies.
-        processor.modality_configs[tag_value] = custom_modality_cfg
-        processor.state_action_processor.modality_configs[tag_value] = (
-            custom_modality_cfg
-        )
-
-        logger.info(
-            "Overrode processor modality config for %s from %s",
-            tag_value,
-            modality_config_path,
-        )
-    num_timesteps = int(robottt_cfg.get("num_timesteps", data_cfg.get("num_timesteps", 16)))
-    timestep_stride = int(robottt_cfg.get("timestep_stride", 1))
-    dataset = Gr00tN1d7SequenceDataset(
-        dataset_path=str(dataset_path),
-        processor=processor,
-        embodiment_tag=embodiment_tag,
-        num_timesteps=num_timesteps,
-        timestep_stride=timestep_stride,
-        seed=int(model_cfg.get("seed", cfg.actor.get("seed", 0))) + rank,
-        video_backend=str(data_cfg.get("video_backend", "torchcodec")),
-        human_video_path=robottt_cfg.get("human_video_path", None),
-        human_video_timesteps=int(robottt_cfg.get("human_video_timesteps", 0) or 0),
-        samples_per_epoch=data_cfg.get("samples_per_epoch", None),
-    )
-
-    if modality_config_path:
-        dataset_stats = dataset.loader.get_dataset_statistics()
-        processor.set_statistics(
-            {embodiment_tag.value: dataset_stats},
-            override=True,
-        )
-        logger.info(
-            "Loaded dataset statistics for %s from %s",
-            embodiment_tag.value,
-            dataset_path,
-        )
-    sampler = DistributedSampler(
-        dataset,
-        num_replicas=world_size,
-        rank=rank,
-        shuffle=not eval_dataset,
-        drop_last=not eval_dataset,
-    )
-    with redirect_qwen3_backbone_to_local(
-        processor.model_name, backbone_model_path
-    ):
-        collator = Gr00tN1d7SequenceCollator(
-            model_name=processor.model_name,
-            transformers_loading_kwargs=getattr(
-                processor, "transformers_loading_kwargs", {"trust_remote_code": True}
-            ),
-        )
-    data_loader = StatefulDataLoader(
-        dataset,
-        batch_size=int(cfg.actor.micro_batch_size),
-        sampler=sampler,
-        num_workers=int(data_cfg.get("num_workers", 4)),
-        pin_memory=True,
-        drop_last=not eval_dataset,
-        collate_fn=collator,
-        prefetch_factor=int(data_cfg.get("prefetch_factor", 2))
-        if int(data_cfg.get("num_workers", 4)) > 0
-        else None,
-    )
-    logger.info(
-        "GR00T N1.7 RoboTTT SFT dataset: %d windows, T=%d, stride=%d, from %s",
-        len(dataset),
-        num_timesteps,
-        timestep_stride,
-        dataset_path,
-    )
-    return data_loader, {"num_samples": len(dataset)}
+def data_metadata(config: dict) -> dict:
+    root = Path(config["data"]["path"]) / "meta"
+    files = [
+        "info.json",
+        "episodes.jsonl",
+        "tasks.jsonl",
+        "stats.json",
+        "modality.json",
+        "embodiment.json",
+    ]
+    hashes = {
+        name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in files
+    }
+    rows = [json.loads(x) for x in (root / "episodes.jsonl").read_text().splitlines()]
+    return {
+        "sha256": hashes,
+        "episodes": rows,
+        "camera_order": CAMERAS,
+        "state_order": STATE_KEYS,
+        "action_order": ACTION_KEYS,
+        "modality": modality_dict(),
+    }

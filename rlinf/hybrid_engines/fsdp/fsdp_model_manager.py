@@ -297,14 +297,6 @@ class FSDPModelManager:
         # persist buffers' names are also recorded, which will be used for weight syncing.
         self.param_names_need_sync = collect_param_names_need_sync(module)
 
-        # HuggingFace leaves missing TTT keys as uninitialized CUDA storage.
-        # Restore from CPU snapshots before FSDP wrap: inplace copy_ during
-        # FSDP forward hits all-gathered views and breaks autograd.
-        for submodule in module.modules():
-            restore = getattr(submodule, "restore_uninitialized_params_", None)
-            if callable(restore):
-                restore()
-
         # build model, optimizer, lr_scheduler, grad_scaler
         self.model = self._strategy.wrap_model(
             model=module, device_mesh=self._device_mesh
@@ -392,9 +384,7 @@ class FSDPModelManager:
             checkpoint_local_staging_dir=self._cfg.fsdp_config.get(
                 "checkpoint_local_staging_dir", None
             ),
-            checkpoint_io_retries=self._cfg.fsdp_config.get(
-                "checkpoint_io_retries", 0
-            ),
+            checkpoint_io_retries=self._cfg.fsdp_config.get("checkpoint_io_retries", 0),
             checkpoint_io_retry_delay_s=self._cfg.fsdp_config.get(
                 "checkpoint_io_retry_delay_s", 0
             ),
@@ -457,6 +447,10 @@ class FSDPModelManager:
         )
 
         if not torch.isfinite(torch.as_tensor(grad_norm)):
+            if self._cfg.optim.get("fail_on_nonfinite", False):
+                raise FloatingPointError(
+                    f"Non-finite grad norm {grad_norm}; optimizer step aborted"
+                )
             self._logger.warning(
                 f"[FSDP] Non-finite grad norm {grad_norm} detected. Skipping optimizer step."
             )

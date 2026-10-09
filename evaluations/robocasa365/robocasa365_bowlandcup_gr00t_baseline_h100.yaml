@@ -1,0 +1,18 @@
+defaults:
+  - env/robocasa365@env.eval
+  - model/gr00t_n1d7@rollout.model
+  - robottt/bowlandcup_model@rollout.model
+  - robottt/bowlandcup_eval@_global_
+  - _self_
+  - override hydra/job_logging: stdout
+
+hydra:
+  searchpath:
+    # Resolve the same GR00T model group as SFT before embodiment's PPO model.
+    - file://${oc.env:REPO_PATH}/examples/sft/config/
+    - file://${oc.env:EMBODIED_PATH}/config/
+runner:
+  logger:
+    log_path: /home/xuzhexuan/project/repos/robottt/logs/eval/baseline_step8000
+    experiment_name: gr00t_baseline
+  ckpt_path: /home/xuzhexuan/project/repos/robottt/logs/20260924-063706-robocasa_bowlandcup_gr00t_baseline_h100/gr00t_baseline/checkpoints/global_step_8000/actor/model_state_dict/full_weights.pt

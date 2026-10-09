@@ -70,14 +70,6 @@ class FSDPVlaSftWorker(FSDPSftWorker):
             return build_evo1_sft_dataloader(
                 self.cfg, self._world_size, self._rank, data_paths
             )
-        elif model_type == SupportedModel.GR00T_N1D7:
-            from rlinf.data.datasets.gr00t_n1d7 import (
-                build_gr00t_n1d7_sft_dataloader,
-            )
-
-            return build_gr00t_n1d7_sft_dataloader(
-                self.cfg, self._world_size, self._rank, data_paths, eval_dataset
-            )
         else:
             raise KeyError(
                 f"not support such model type {self.cfg.actor.model.model_type} for SFT right now."
@@ -111,90 +103,6 @@ class FSDPVlaSftWorker(FSDPSftWorker):
     def save_checkpoint(self, save_path: str, step: int = 0) -> None:
         super().save_checkpoint(save_path, step)
 
-        # Package the exact runtime configuration used by this checkpoint.
-        if self._rank == 0:
-            import json
-            import shutil
-
-            from omegaconf import OmegaConf
-
-            inference_dir = os.path.join(save_path, "inference_meta")
-            os.makedirs(inference_dir, exist_ok=True)
-
-            dataset_meta_dir = os.path.join(
-                str(self.cfg.data.train_data_paths), "meta"
-            )
-            robottt_cfg = self.cfg.data.get("robottt", {}) or {}
-            ttt_cfg = self.cfg.actor.model.get("rl_head_config", {}).get(
-                "ttt", {}
-            )
-            modality_config_path = robottt_cfg.get("modality_config_path")
-
-            files_to_copy = {
-                os.path.join(dataset_meta_dir, "modality.json"):
-                    "modality.json",
-                os.path.join(dataset_meta_dir, "embodiment.json"):
-                    "embodiment.json",
-                os.path.join(dataset_meta_dir, "stats.json"):
-                    "stats.json",
-            }
-            if modality_config_path:
-                files_to_copy[str(modality_config_path)] = os.path.basename(
-                    str(modality_config_path)
-                )
-
-            for src, dst_name in files_to_copy.items():
-                if os.path.isfile(src):
-                    shutil.copy2(
-                        src,
-                        os.path.join(inference_dir, dst_name),
-                    )
-
-            OmegaConf.save(self.cfg, os.path.join(inference_dir, "train_config.yaml"))
-
-            inference_config = {
-                "checkpoint_step": int(step),
-                "embodiment_tag": str(self.cfg.actor.model.embodiment_tag),
-                "action_dim": int(self.cfg.actor.model.action_dim),
-                "valid_action_dim": int(self.cfg.actor.model.valid_action_dim),
-                "image_nums": int(self.cfg.actor.model.image_nums),
-                "num_action_chunks": int(self.cfg.actor.model.num_action_chunks),
-                "model_action_horizon": 40,
-                "model_max_action_dim": 132,
-                "robottt": {
-                    "enabled": bool(
-                        self.cfg.actor.model.rl_head_config.get("use_ttt", False)
-                    ),
-                    "fast_model": str(ttt_cfg.get("fast_model", "mlp")),
-                    "context_tokens": str(ttt_cfg.get("context_tokens", "register")),
-                    "max_rollout_context_steps": int(
-                        ttt_cfg.get("max_rollout_context_steps", 0) or 0
-                    ),
-                    "training_num_timesteps": int(
-                        robottt_cfg.get("num_timesteps", 1)
-                    ),
-                    "training_timestep_stride": int(
-                        robottt_cfg.get("timestep_stride", 1)
-                    ),
-                },
-                "model_weights": "../model_state_dict/full_weights.pt",
-            }
-
-            with open(
-                os.path.join(
-                    inference_dir,
-                    "inference_config.json",
-                ),
-                "w",
-            ) as f:
-                json.dump(
-                    inference_config,
-                    f,
-                    indent=2,
-                )
-
-        torch.distributed.barrier()
-
         if isinstance(self.data_loader, StatefulDataLoader):
             state = self.data_loader.state_dict()
 
@@ -218,36 +126,17 @@ class FSDPVlaSftWorker(FSDPSftWorker):
         super().load_checkpoint(load_path)
 
         if isinstance(self.data_loader, StatefulDataLoader):
-            data_path = os.path.join(load_path, "data.pt")
-            all_states = torch.load(data_path, weights_only=False)
-
-            if len(all_states) == self._world_size:
-                state = all_states[self._rank]
-                self.data_loader.load_state_dict(state)
-                self.data_iter = iter(self.data_loader)
-            else:
-                if self._rank == 0:
-                    print(
-                        f"[Checkpoint] dataloader world-size mismatch: "
-                        f"checkpoint={len(all_states)}, current={self._world_size}. "
-                        "Skipping dataloader state restore."
-                    )
-                # Re-create iterator from the current 8-rank dataloader.
-                self.data_iter = iter(self.data_loader)
+            all_states = torch.load(
+                os.path.join(load_path, "data.pt"), weights_only=False
+            )
+            state = all_states[self._rank]
+            self.data_loader.load_state_dict(state)
+            self.data_iter = iter(self.data_loader)
 
             rng_path = os.path.join(load_path, "rng.pt")
             if os.path.exists(rng_path):
                 all_rng_states = torch.load(rng_path, weights_only=False)
-
-                if len(all_rng_states) == self._world_size:
-                    set_rng_state(all_rng_states[self._rank])
-                else:
-                    if self._rank == 0:
-                        print(
-                            f"[Checkpoint] RNG world-size mismatch: "
-                            f"checkpoint={len(all_rng_states)}, current={self._world_size}. "
-                            "Keeping current per-rank RNG state."
-                        )
+                set_rng_state(all_rng_states[self._rank])
 
             torch.distributed.barrier()
 

@@ -140,12 +140,6 @@ class FSDPSftWorker(FSDPModelManager, Worker):
             metrics = {}
 
             for idx in range(self.gradient_accumulation):
-                # set the gradient accumulation backward_ctx
-                backward_ctx = self.before_micro_batch(
-                    self.model,
-                    is_last_micro_batch=(idx + 1) == self.gradient_accumulation,
-                )
-
                 try:
                     batch = next(self.data_iter)
                     self._data_iter_offset += 1
@@ -159,12 +153,10 @@ class FSDPSftWorker(FSDPModelManager, Worker):
                     batch = next(self.data_iter)
                     self._data_iter_offset = 1
 
-                loss, step_metrics = self.get_train_model_output(batch)
+                step_metrics = self.forward_backward_batch(
+                    batch, is_last_micro_batch=(idx + 1) == self.gradient_accumulation
+                )
                 append_to_dict(metrics, step_metrics)
-
-                loss = loss / self.gradient_accumulation
-                with backward_ctx:
-                    self.grad_scaler.scale(loss).backward()
 
             # in one step do the optimizer step
             grad_norm, lr_list = self.optimizer_step()
@@ -178,7 +170,8 @@ class FSDPSftWorker(FSDPModelManager, Worker):
             append_to_dict(
                 metrics,
                 {
-                    "learning_rate": lr_value,
+                    "learning_rate": lr_list[0],
+                    "next_learning_rate": lr_value,
                     "grad_norm": grad_norm_value,
                 },
             )
@@ -192,6 +185,17 @@ class FSDPSftWorker(FSDPModelManager, Worker):
             )
 
             return train_metrics
+
+    def forward_backward_batch(self, batch, is_last_micro_batch: bool):
+        """Run one micro-batch with synchronization covering forward and backward.
+
+        Sequence workers override this boundary for TBPTT while retaining this
+        worker's data iteration, optimizer, clipping, scheduling and reductions.
+        """
+        with self.before_micro_batch(self.model, is_last_micro_batch):
+            loss, metrics = self.get_train_model_output(batch)
+            self.grad_scaler.scale(loss / self.gradient_accumulation).backward()
+        return metrics
 
     @abstractmethod
     def build_dataloader(self):

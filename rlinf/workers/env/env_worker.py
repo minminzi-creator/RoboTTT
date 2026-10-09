@@ -540,6 +540,9 @@ class EnvWorker(Worker):
             rewards=chunk_rewards,
             env_infos=infos if isinstance(infos, dict) else None,
             dones=chunk_dones,
+            reset_mask=chunk_dones.any(dim=1)
+            if self.cfg.env.train.auto_reset
+            else torch.zeros_like(chunk_dones[:, 0]),
             terminations=chunk_terminations,
             truncations=chunk_truncations,
             intervene_actions=intervene_actions,
@@ -617,6 +620,10 @@ class EnvWorker(Worker):
             final_obs=final_obs,
             env_infos=infos if isinstance(infos, dict) else None,
             rlt_switch_flags=rlt_switch_flags,
+            dones=chunk_dones,
+            reset_mask=current_dones
+            if self.cfg.env.eval.auto_reset
+            else torch.zeros_like(current_dones),
         )
         return env_output, env_info
 
@@ -921,6 +928,7 @@ class EnvWorker(Worker):
                 env_output = EnvOutput(
                     obs=extracted_obs,
                     dones=dones,
+                    reset_mask=torch.ones_like(dones[:, 0]),
                     terminations=terminations,
                     truncations=truncations,
                     final_obs=(
@@ -956,7 +964,8 @@ class EnvWorker(Worker):
         data = {
             "obs": env_batch["obs"],
             "final_obs": env_batch["final_obs"],
-            "dones": env_batch.get("dones", None),
+            "dones": env_batch.get("dones"),
+            "reset_mask": env_batch.get("reset_mask"),
         }
         if self.enable_rlt:
             data["rlt_switch_flags"] = env_batch.get("rlt_switch_flags", None)
@@ -1385,6 +1394,9 @@ class EnvWorker(Worker):
                     extracted_obs, infos = self.eval_env_list[stage_id].reset()
                     env_output = EnvOutput(
                         obs=extracted_obs,
+                        reset_mask=torch.ones(
+                            self.eval_num_envs_per_stage, dtype=torch.bool
+                        ),
                         final_obs=(
                             infos["final_observation"]
                             if "final_observation" in infos

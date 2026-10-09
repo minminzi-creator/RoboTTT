@@ -208,102 +208,110 @@ def convert_to_isaaclab_stack_cube_action(
     return action_array
 
 
-
-
-def _robocasa365_to_numpy(value):
+def _to_numpy(value) -> np.ndarray:
     if torch.is_tensor(value):
         return value.detach().cpu().numpy()
     return np.asarray(value)
 
 
+def _add_time_dim(images: np.ndarray) -> np.ndarray:
+    """[B, H, W, C] -> [B, 1, H, W, C] for the GR00T processor."""
+    if images.ndim == 4:
+        return images[:, None]
+    return images
+
+
 def convert_robocasa365_obs_to_gr00t_format(env_obs):
-    """Convert RLinf RoboCasa365 observation to the SFT NEW_EMBODIMENT format.
+    """Convert RoboCasa365 env obs to the BowlAndCup / PandaOmron GR00T keys.
 
-    env state layout:
-      base_pos(3)
-      base_quat(4)
-      base_to_eef_pos(3)
-      base_to_eef_quat(4)
-      gripper_qpos(2)
-    total = 16
+    Env cameras (after ``robocasa365`` wrapping):
+      ``main_images`` = robot0_agentview_left
+      ``wrist_images`` = robot0_eye_in_hand
+      ``extra_view_images[:, 0]`` = robot0_agentview_right
+
+    State must already be packed as the 16-D layout used by the SFT dataset:
+      base_pos(3), base_quat(4), base_to_eef_pos(3), base_to_eef_quat(4),
+      gripper_qpos(2).
     """
-    main = _robocasa365_to_numpy(env_obs["main_images"])
-    wrist = _robocasa365_to_numpy(env_obs["wrist_images"])
-    extra = _robocasa365_to_numpy(env_obs["extra_view_images"])
-    state = _robocasa365_to_numpy(env_obs["states"])
-
-    if state.ndim != 2 or state.shape[-1] != 16:
+    states = _to_numpy(env_obs["states"])
+    if states.ndim != 2 or states.shape[-1] != 16:
         raise ValueError(
-            f"RoboCasa365 GR00T expects states [B,16], got {state.shape}"
+            "RoboCasa365 GR00T obs expects states of shape [B, 16] "
+            f"(base_pos, base_quat, base_to_eef_pos, base_to_eef_quat, "
+            f"gripper_qpos), got {states.shape}."
         )
 
-    if extra.ndim != 5 or extra.shape[1] < 1:
+    extra = env_obs.get("extra_view_images")
+    if extra is None:
+        raise KeyError(
+            "RoboCasa365 GR00T obs requires extra_view_images for "
+            "robot0_agentview_right. Set env.observation.extra_camera_keys."
+        )
+    extra = _to_numpy(extra)
+    if extra.ndim == 5:
+        right_images = extra[:, 0]
+    elif extra.ndim == 4:
+        right_images = extra
+    else:
         raise ValueError(
-            "RoboCasa365 GR00T expects extra_view_images "
-            f"[B,N,H,W,C] with N>=1, got {extra.shape}"
+            "extra_view_images must be [B, H, W, C] or [B, N, H, W, C], "
+            f"got {extra.shape}."
         )
 
-    right = extra[:, 0]
-
-    # [B,H,W,C] -> [B,T=1,H,W,C]
+    states_bt = states[:, None, :]
     groot_obs = {
-        "video.robot0_agentview_left": main[:, None],
-        "video.robot0_agentview_right": right[:, None],
-        "video.robot0_eye_in_hand": wrist[:, None],
-
-        "state.base_position": state[:, None, 0:3],
-        "state.base_rotation": state[:, None, 3:7],
-        "state.end_effector_position_relative": state[:, None, 7:10],
-        "state.end_effector_rotation_relative": state[:, None, 10:14],
-        "state.gripper_qpos": state[:, None, 14:16],
-
+        "video.robot0_agentview_left": _add_time_dim(_to_numpy(env_obs["main_images"])),
+        "video.robot0_agentview_right": _add_time_dim(right_images),
+        "video.robot0_eye_in_hand": _add_time_dim(_to_numpy(env_obs["wrist_images"])),
+        "state.base_position": states_bt[:, :, 0:3],
+        "state.base_rotation": states_bt[:, :, 3:7],
+        "state.end_effector_position_relative": states_bt[:, :, 7:10],
+        "state.end_effector_rotation_relative": states_bt[:, :, 10:14],
+        "state.gripper_qpos": states_bt[:, :, 14:16],
         "annotation.human.task_description": env_obs["task_descriptions"],
     }
-
     return groot_obs
 
 
 def convert_to_robocasa365_action_n1d7(
     action_chunk: dict[str, np.ndarray],
-    chunk_size: int = 8,
+    chunk_size: int = 1,
+    binary_threshold: float = 0.0,
 ) -> np.ndarray:
-    """Convert SFT grouped 12D action to native PandaOmron RoboCasa action.
+    """Convert GR00T N1.7 action keys to the 12-D RoboCasa365 env action.
 
-    SFT / processor order:
-      base_motion(4), control_mode(1),
-      ee_position(3), ee_rotation(3), gripper(1)
+    GR00T predicts fields in the LeRobot modality order, but the raw
+    ``robosuite`` environment expects its native controller order:
+      end_effector_position(3), end_effector_rotation(3), gripper(1),
+      base_motion(4), control_mode(1).
 
-    RoboCasa native order:
-      ee_position(3), ee_rotation(3), gripper(1),
-      base_motion(4), control_mode(1)
+    Project the dataset's -1/+1 discrete controls at the explicit threshold.
+    The reference converter uses 0.5; symmetric projection uses 0.0. Threshold
+    the discrete gripper and base-mode fields before passing them to robosuite.
     """
-
-    base = np.asarray(action_chunk["base_motion"])[:, :chunk_size]
-    mode = np.asarray(action_chunk["control_mode"])[:, :chunk_size]
-    pos = np.asarray(action_chunk["end_effector_position"])[:, :chunk_size]
-    rot = np.asarray(action_chunk["end_effector_rotation"])[:, :chunk_size]
-    grip = np.asarray(action_chunk["gripper_close"])[:, :chunk_size]
-
-    action = np.concatenate(
-        [
-            pos,
-            rot,
-            grip,
-            base,
-            mode,
-        ],
-        axis=-1,
-    ).astype(np.float32, copy=False)
-
-    if action.shape[-1] != 12:
+    gripper = action_chunk["gripper_close"][:, :chunk_size]
+    control_mode = action_chunk["control_mode"][:, :chunk_size]
+    gripper = np.where(gripper < binary_threshold, -1.0, 1.0).astype(
+        gripper.dtype, copy=False
+    )
+    control_mode = np.where(control_mode < binary_threshold, -1.0, 1.0).astype(
+        control_mode.dtype, copy=False
+    )
+    components = [
+        action_chunk["end_effector_position"][:, :chunk_size],
+        action_chunk["end_effector_rotation"][:, :chunk_size],
+        gripper,
+        action_chunk["base_motion"][:, :chunk_size],
+        control_mode,
+    ]
+    action_array = np.concatenate(components, axis=-1)
+    if action_array.shape[-1] != 12:
         raise ValueError(
-            f"Expected 12-dim RoboCasa365 action, got {action.shape}"
+            f"Expected 12-dim robocasa365 action, got {action_array.shape[-1]}"
         )
-
-    # Native RoboCasa gripper expects {-1,+1}
-    action[..., 6] = np.where(action[..., 6] >= 0.0, 1.0, -1.0)
-
-    return action
+    if not np.isfinite(action_array).all():
+        raise FloatingPointError("Non-finite RoboCasa action")
+    return action_array.astype(np.float32, copy=False)
 
 
 OBS_CONVERSION = {

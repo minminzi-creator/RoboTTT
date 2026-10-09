@@ -50,8 +50,8 @@ video_cfg:
   video_base_dir: "../results/video/train"
 
 init_params:
-  camera_heights: 224
-  camera_widths: 224
+  camera_heights: 256
+  camera_widths: 256
 
 observation:
   main_camera_key: robot0_agentview_left_image

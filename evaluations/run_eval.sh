@@ -149,12 +149,17 @@ if [ "$1" = "mani-ood" ]; then
     exit 0
 fi
 
-if [ $# -ge 2 ] && [ -f "${EVALUATIONS_PATH}/$1/$2.yaml" ]; then
+if [ -f "$1" ]; then
+    CONFIG_PATH="$(cd "$(dirname "$1")" && pwd)"
+    CONFIG_NAME="$(basename "$1" .yaml)"
+    BENCHMARK="$(infer_benchmark "${CONFIG_NAME}")"
+    shift
+elif [ $# -ge 2 ] && [ -f "${EVALUATIONS_PATH}/$1/${2%.yaml}.yaml" ]; then
     BENCHMARK="$1"
-    CONFIG_NAME="$2"
+    CONFIG_NAME="${2%.yaml}"
     shift 2
 else
-    CONFIG_NAME="$1"
+    CONFIG_NAME="${1%.yaml}"
     BENCHMARK="$(infer_benchmark "${CONFIG_NAME}")"
     shift
     if [ "${BENCHMARK}" = "unknown" ]; then
@@ -164,10 +169,16 @@ else
 fi
 
 EXTRA_ARGS=("$@")
-CONFIG_PATH="${EVALUATIONS_PATH}/${BENCHMARK}"
+CONFIG_PATH="${CONFIG_PATH:-${EVALUATIONS_PATH}/${BENCHMARK}}"
 if [ ! -f "${CONFIG_PATH}/${CONFIG_NAME}.yaml" ]; then
     CONFIG_PATH="${EMBODIED_PATH}/config"
     echo "Config not found under evaluations/${BENCHMARK}, fallback to ${CONFIG_PATH}"
+fi
+
+if [ "${BENCHMARK}" = "robocasa365" ]; then
+    export MUJOCO_GL=egl PYOPENGL_PLATFORM=egl
+    export RLINF_ROBOCASA_LOCAL_EGL_DEVICE=1
+    export USE_TF=0 NO_ALBUMENTATIONS_UPDATE=1
 fi
 
 if [ "${BENCHMARK}" != "realworld" ]; then
@@ -197,7 +208,7 @@ else
 fi
 
 echo "Using Python at $(which python)"
-LOG_DIR="${REPO_PATH}/logs/$(date +'%Y%m%d-%H:%M:%S')-${CONFIG_NAME}"
+LOG_DIR="${LOG_PATH:-${REPO_PATH}/logs/$(date +'%Y%m%d-%H%M%S')-${CONFIG_NAME}}"
 
 MEGA_LOG_FILE="${LOG_DIR}/eval_embodiment.log"
 

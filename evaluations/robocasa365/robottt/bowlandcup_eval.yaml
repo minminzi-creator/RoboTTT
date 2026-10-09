@@ -1,0 +1,71 @@
+# Full BowlAndCup rollout settings shared by the GR00T and RoboTTT evaluations.
+# Robot/camera/action defaults still come from the native env/robocasa365 group,
+# and both policies inherit the same model and modality settings used by SFT.
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+cluster:
+  num_nodes: 1
+  component_placement:
+    # One environment and one rollout worker are placed on each of the 8 GPUs.
+    env,rollout: all
+runner:
+  task_type: embodied_eval
+  logger:
+    project_name: robottt
+    logger_backends: [tensorboard]
+  max_epochs: 1
+  only_eval: true
+  val_check_interval: -1
+  save_interval: -1
+  resume_dir: null
+env:
+  group_name: EnvGroup
+  enable_offload: false
+  eval:
+    task_soup: []
+    task_mode: null
+    task_sampling_strategy: ordered
+    total_num_envs: 8
+    rollout_epoch: 1
+    auto_reset: false
+    ignore_terminations: false
+    # BowlAndCup's registry horizon is 2400 simulator steps. Keep the fallback
+    # at the same value so a registry lookup failure cannot shorten evaluation.
+    episode_horizon_source: task_horizon
+    max_steps_per_rollout_epoch: 2400
+    max_episode_steps: 2400
+    use_fixed_reset_state_ids: true
+    group_size: 1
+    is_eval: true
+    seed: 7
+    # Across the 8 workers this assigns seeds 7..14. Baseline and RoboTTT see
+    # the same eight starts, while the parallel environments are not duplicates.
+    seed_strategy: global_unique
+    video_cfg:
+      save_video: true
+      info_on_video: true
+      extra_info_on_video:
+        - episode.success_once
+        - episode.success_at_end
+        - episode.episode_len
+      video_base_dir: ${runner.logger.log_path}/video
+    init_params:
+      camera_heights: 256
+      camera_widths: 256
+    observation:
+      state_layout: [base_pos, base_quat, base_to_eef_pos, base_to_eef_quat, gripper_qpos]
+    action_space:
+      binarize_gripper_control: false
+    task_names: [BowlAndCup]
+rollout:
+  group_name: RolloutGroup
+  rollout_backend: huggingface
+  generation_backend: huggingface
+  recompute_logprobs: false
+  enable_offload: false
+  pipeline_stage_num: 1
+  cpu_threads: 4
+  compiler_cache_dir: /home/xuzhexuan/project/robottt_runs/compiler_cache/native
+  record_recurrent_state: true

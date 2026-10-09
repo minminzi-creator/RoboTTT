@@ -118,6 +118,7 @@ SupportedModel.QWEN3_VL_MOE_SFT = SupportedModel.register("qwen3_vl_moe", force=
 SupportedModel.GR00T_N1D6 = SupportedModel.register("gr00t_n1d6", force=True)
 SupportedModel.DEEPSEEK_V3 = SupportedModel.register("deepseek_v3", force=True)
 SupportedModel.GR00T_N1D7 = SupportedModel.register("gr00t_n1d7", force=True)
+SupportedModel.ROBOTTT = SupportedModel.register("robottt", force=True)
 SupportedModel.EVO1 = SupportedModel.register("evo1", force=True)
 
 EMBODIED_MODEL = set(
@@ -142,6 +143,7 @@ EMBODIED_MODEL = set(
         SupportedModel.RESNET_REWARD,
         SupportedModel.GR00T_N1D6,
         SupportedModel.GR00T_N1D7,
+        SupportedModel.ROBOTTT,
         SupportedModel.CFG_MODEL,
         SupportedModel.RECAP_VALUE_MODEL,
         SupportedModel.STEAM_VALUE_MODEL,

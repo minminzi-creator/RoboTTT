@@ -15,7 +15,10 @@
 import asyncio
 import copy
 import gc
+import hashlib
+import json
 import time
+from pathlib import Path
 from typing import Any, Callable, Literal, Optional
 
 import numpy as np
@@ -43,6 +46,7 @@ class MultiStepRolloutWorker(Worker):
 
         self.cfg = cfg
         self.should_stop = False
+        self._policy_memories = {}
 
         self.only_eval = cfg.runner.get("only_eval", False)
         self.algorithm_cfg = cfg.get("algorithm", {})
@@ -142,11 +146,41 @@ class MultiStepRolloutWorker(Worker):
             rollout_model_config.precision = self.cfg.rollout.model.precision
             rollout_model_config.model_path = self.cfg.rollout.model.model_path
 
+        if rollout_model_config.get("sequence_training", False):
+            from rlinf.models.embodiment.gr00t.gr00t_n1d7.sequence_utils import (
+                configure_runtime,
+            )
+
+            configure_runtime(
+                self.cfg.rollout.compiler_cache_dir,
+                "rollout",
+                self._rank,
+                self.cfg.rollout.cpu_threads,
+            )
+
         self.hf_model: BasePolicy = get_model(rollout_model_config)
 
         if self.cfg.runner.get("ckpt_path", None):
-            model_dict = torch.load(self.cfg.runner.ckpt_path)
-            self.hf_model.load_state_dict(model_dict)
+            model_dict = torch.load(
+                self.cfg.runner.ckpt_path, map_location="cpu", weights_only=True
+            )
+            self.hf_model.load_state_dict(model_dict, strict=True)
+            del model_dict
+            load_metadata = getattr(self.hf_model, "load_inference_metadata", None)
+            if callable(load_metadata):
+                load_metadata(self.cfg.runner.ckpt_path, rollout_model_config)
+        if getattr(self.hf_model, "supports_recurrent_memory", False):
+            from rlinf.utils.utils import seed_everything
+
+            if not self.cfg.runner.get("ckpt_path"):
+                raise ValueError(
+                    "Sequence rollout requires a checkpoint with a processor bundle"
+                )
+            if self.env_decoupled_mode or self.enable_dagger:
+                raise ValueError(
+                    "Recurrent rollout requires stable synchronous environment routing"
+                )
+            seed_everything(self.cfg.env.eval.seed + self._rank)
 
         rlt_feature_model_config = OmegaConf.select(
             self.cfg, "rollout.rlt_feature_model", default=None
@@ -470,7 +504,8 @@ class MultiStepRolloutWorker(Worker):
         self,
         env_obs: dict[str, Any],
         mode: Literal["train", "eval"] = "train",
-        **extra_kwargs,
+        reset_mask: torch.Tensor | None = None,
+        stage_id: int = 0,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         kwargs = (
             self._train_sampling_params
@@ -486,6 +521,7 @@ class MultiStepRolloutWorker(Worker):
             SupportedModel.GR00T,
             SupportedModel.GR00T_N1D6,
             SupportedModel.GR00T_N1D7,
+            SupportedModel.ROBOTTT,
             SupportedModel.ABOT_M0,
             SupportedModel.DREAMZERO,
             SupportedModel.CNN_POLICY,
@@ -504,12 +540,11 @@ class MultiStepRolloutWorker(Worker):
         ]:
             kwargs["return_obs"] = not hasattr(self.hf_model, "q_head")
 
-        extra_rollout = {
-            key: value
-            for key, value in extra_kwargs.items()
-            if key in {"dones", "stage_id"} and value is not None
-        }
-        kwargs = {**kwargs, **extra_rollout}
+        recurrent = getattr(self.hf_model, "supports_recurrent_memory", False)
+        memory_key = (mode, stage_id)
+        if recurrent:
+            incoming = self._policy_memories.get(memory_key)
+            kwargs = {**kwargs, "incoming_memory": incoming, "reset_mask": reset_mask}
 
         only_save_expert = self.algorithm_cfg.get("dagger", {}).get(
             "only_save_expert", True
@@ -556,6 +591,89 @@ class MultiStepRolloutWorker(Worker):
                     result["forward_inputs"]["model_action"] = expert_target
                 expert_label_flag = True
 
+        if recurrent:
+            candidate = result.pop("memory")
+            diagnostics = result.pop("memory_diagnostics")
+            if candidate is not None:
+                if any(
+                    not torch.isfinite(t).all()
+                    for layer in candidate.layers
+                    for t in layer
+                ):
+                    raise FloatingPointError("Non-finite candidate memory")
+                expected = (
+                    torch.zeros_like(candidate.position)
+                    if incoming is None
+                    else incoming.position
+                )
+                if reset_mask is not None:
+                    expected = torch.where(
+                        reset_mask.to(expected.device).bool(), 0, expected
+                    )
+                if not torch.equal(candidate.position, expected + 1):
+                    raise RuntimeError(
+                        "Policy call must advance memory by exactly one anchor"
+                    )
+            expected_forwards = self.hf_model.settings["inference"][
+                "denoise_steps"
+            ] + int(
+                self.hf_model.use_ttt
+                and self.hf_model.settings["inference"]["memory_write_source"]
+                == "final_prediction"
+            )
+            if diagnostics["dit_forwards"] != expected_forwards:
+                raise RuntimeError("Unexpected DiT forward count")
+            # The only persistent memory write; model and checkpoint replay are pure.
+            self._policy_memories[memory_key] = candidate
+            if self.cfg.rollout.get("record_recurrent_state", False):
+                path = (
+                    Path(self.cfg.runner.logger.log_path)
+                    / f"rollout_state_rank{self._rank}.jsonl"
+                )
+                reset_observation_sha256 = None
+                if reset_mask is not None and reset_mask.any():
+                    digest = hashlib.sha256()
+                    for key in (
+                        "main_images",
+                        "wrist_images",
+                        "extra_images",
+                        "states",
+                        "task_descriptions",
+                    ):
+                        value = env_obs.get(key)
+                        if isinstance(value, torch.Tensor):
+                            value = value.detach().cpu().contiguous().numpy()
+                        digest.update(key.encode())
+                        if isinstance(value, np.ndarray):
+                            digest.update(str((value.shape, value.dtype.str)).encode())
+                            digest.update(np.ascontiguousarray(value).tobytes())
+                        else:
+                            digest.update(json.dumps(value, sort_keys=True).encode())
+                    reset_observation_sha256 = digest.hexdigest()
+                raw_actions = (
+                    actions.detach().cpu().numpy()
+                    if isinstance(actions, torch.Tensor)
+                    else actions
+                )
+                record = {
+                    "reset_observation_sha256": reset_observation_sha256,
+                    "native_action_shape": list(raw_actions.shape),
+                    "native_actions_finite": bool(np.isfinite(raw_actions).all()),
+                    "mode": mode,
+                    "stage_id": stage_id,
+                    "incoming_position": None
+                    if incoming is None
+                    else incoming.position.tolist(),
+                    "reset_mask": None if reset_mask is None else reset_mask.tolist(),
+                    "committed_position": None
+                    if candidate is None
+                    else candidate.position.tolist(),
+                    "commits": int(candidate is not None),
+                    **diagnostics,
+                }
+                with path.open("a") as output:
+                    output.write(json.dumps(record) + "\n")
+
         if isinstance(actions, np.ndarray):
             actions = torch.from_numpy(actions)
 
@@ -569,7 +687,7 @@ class MultiStepRolloutWorker(Worker):
         final_obs: dict[str, Any] | None = None,
         rlt_switch_flags: torch.Tensor | None = None,
         intervene_requested: torch.Tensor | None = None,
-        dones: torch.Tensor | None = None,
+        reset_mask: torch.Tensor | None = None,
         stage_id: int = 0,
     ) -> tuple[torch.Tensor, dict[str, Any]]:
         if self.rlt_feature_model is not None:
@@ -586,7 +704,7 @@ class MultiStepRolloutWorker(Worker):
                 expert_model=self.expert_model,
             )
         return self.predict(
-            env_obs, mode=mode, dones=dones, stage_id=stage_id
+            env_obs, mode=mode, reset_mask=reset_mask, stage_id=stage_id
         )
 
     def _build_policy_output(
@@ -677,6 +795,7 @@ class MultiStepRolloutWorker(Worker):
 
         applied_version = await self.weight_syncer.apply(self.hf_model, recv_func)
         self.version = applied_version
+        self._policy_memories.clear()
         if self.finished_episodes is None:
             self.finished_episodes = (
                 self.version * self.total_num_train_envs * self.rollout_epoch
@@ -707,7 +826,7 @@ class MultiStepRolloutWorker(Worker):
                     final_obs=env_output.get("final_obs", None),
                     rlt_switch_flags=env_output.get("rlt_switch_flags", None),
                     intervene_requested=env_output.get("intervene_flags", None),
-                    dones=env_output.get("dones", None),
+                    reset_mask=env_output.get("reset_mask"),
                     stage_id=stage_id,
                 )
 
@@ -742,7 +861,7 @@ class MultiStepRolloutWorker(Worker):
                 final_obs=env_output.get("final_obs", None),
                 rlt_switch_flags=env_output.get("rlt_switch_flags", None),
                 intervene_requested=env_output.get("intervene_flags", None),
-                dones=env_output.get("dones", None),
+                reset_mask=env_output.get("reset_mask"),
                 stage_id=stage_id,
             )
 
@@ -800,6 +919,11 @@ class MultiStepRolloutWorker(Worker):
 
     @Worker.timer("evaluate")
     async def evaluate(self, input_channel: Channel, output_channel: Channel):
+        self._policy_memories = {
+            key: value
+            for key, value in self._policy_memories.items()
+            if key[0] != "eval"
+        }
         if self.enable_offload:
             self.reload_model()
         if self.env_decoupled_mode:
@@ -823,7 +947,8 @@ class MultiStepRolloutWorker(Worker):
                     final_obs=env_output.get("final_obs", None),
                     rlt_switch_flags=env_output.get("rlt_switch_flags", None),
                     intervene_requested=env_output.get("intervene_flags", None),
-                    dones=env_output.get("dones", None),
+                    reset_mask=env_output.get("reset_mask"),
+                    stage_id=0,
                 )
                 if isinstance(actions, torch.Tensor):
                     actions = actions.detach().cpu().contiguous()
@@ -858,7 +983,7 @@ class MultiStepRolloutWorker(Worker):
                             final_obs=env_output.get("final_obs", None),
                             rlt_switch_flags=env_output.get("rlt_switch_flags", None),
                             intervene_requested=env_output.get("intervene_flags", None),
-                            dones=env_output.get("dones", None),
+                            reset_mask=env_output.get("reset_mask"),
                             stage_id=stage_id,
                         )
                         if isinstance(actions, torch.Tensor):
@@ -941,7 +1066,8 @@ class MultiStepRolloutWorker(Worker):
         intervene_flags_list = [
             obs_batch.get("intervene_flags", None) for obs_batch in obs_batches
         ]
-        dones_list = [obs_batch.get("dones", None) for obs_batch in obs_batches]
+
+        reset_masks = [obs_batch.get("reset_mask") for obs_batch in obs_batches]
 
         def _merge_obs_dicts(dicts: list[dict[str, Any]]) -> dict[str, Any]:
             merged: dict[str, Any] = {}
@@ -978,7 +1104,7 @@ class MultiStepRolloutWorker(Worker):
             "intervene_flags": self._merge_optional_flag_tensors(
                 obs_dicts, intervene_flags_list
             ),
-            "dones": self._merge_optional_flag_tensors(obs_dicts, dones_list),
+            "reset_mask": self._merge_optional_flag_tensors(obs_dicts, reset_masks),
         }
 
     def _split_policy_output(

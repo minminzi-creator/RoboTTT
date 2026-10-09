@@ -294,6 +294,12 @@ def _register_builtin_models():
         force=True,
     )
     register_model(
+        SupportedModel.ROBOTTT.value,
+        _build_gr00t_n1d7,
+        category="embodied",
+        force=True,
+    )
+    register_model(
         SupportedModel.EVO1.value,
         _build_evo1,
         category="embodied",

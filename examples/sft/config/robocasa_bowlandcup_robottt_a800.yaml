@@ -1,0 +1,19 @@
+defaults:
+  - model/gr00t_n1d7@actor.model
+  - hybrid_engines/fsdp@actor.fsdp_config
+  - robottt/bowlandcup_a800@_global_
+  - _self_
+  - override hydra/job_logging: stdout
+
+runner:
+  logger:
+    log_path: /mnt/public/chenzm/robottt/train_aligned_native
+    experiment_name: robottt_aligned
+
+actor:
+  model:
+    model_type: robottt
+    rl_head_config:
+      use_ttt: true
+      ttt:
+        num_register_tokens: 16

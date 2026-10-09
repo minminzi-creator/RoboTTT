@@ -17,6 +17,7 @@
 Based on metaworld/venv.py implementation, adapted for Robocasa/Robosuite environments.
 """
 
+import os
 from multiprocessing import Pipe, connection
 from multiprocessing.context import Process
 from typing import Any, Callable, Optional, Union
@@ -78,6 +79,16 @@ def _worker(
         return env_return
 
     parent.close()
+
+    # On the H100 host Ray exposes one physical GPU per worker. EGL sees
+    # that device at local ordinal zero; keep this opt-in for other topologies.
+    if os.environ.get("RLINF_ROBOCASA_LOCAL_EGL_DEVICE") == "1":
+        visible = [
+            x for x in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",") if x
+        ]
+        if len(visible) == 1:
+            os.environ["MUJOCO_EGL_DEVICE_ID"] = "0"
+            os.environ["EGL_DEVICE_ID"] = "0"
     env = env_fn_wrapper.data()
     try:
         while True:
