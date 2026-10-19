@@ -1,0 +1,18 @@
+{
+  "python": "3.11.14 (main, Feb 12 2026, 00:42:50) [Clang 21.1.4 ]",
+  "packages": {
+    "torch": "2.11.0+cu129",
+    "torchvision": "0.26.0+cu129",
+    "torchcodec": "0.11.1",
+    "transformers": "4.57.3",
+    "diffusers": "0.35.1",
+    "torchdata": "0.11.0",
+    "ray": "2.58.0",
+    "albumentations": "1.4.18",
+    "flash-attn": "2.8.3+cu12torch2.11cxx11abitrue",
+    "numpy": "2.2.5",
+    "pandas": "2.3.3",
+    "pyarrow": "25.0.1",
+    "hydra-core": "1.4.0.dev6"
+  }
+}

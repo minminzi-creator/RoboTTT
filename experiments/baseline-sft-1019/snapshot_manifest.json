@@ -1,0 +1,784 @@
+{
+  "started_utc": "2026-10-19T08:28:55.895589+00:00",
+  "base_commit": "7e90641c4135229db6d3426950cdb45cee6259a6",
+  "files": [
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/examples/sft/train_vla_sft.py",
+      "destination": "examples/sft/train_vla_sft.py",
+      "source_size": 2286,
+      "source_mtime_ns": 1792131342000000000,
+      "source_sha256": "f31a13c8d88f34f9258a46dcba437dc1dd5f3817f2d5ab6313e37bb6b519f688",
+      "stored_size": 2286,
+      "stored_sha256": "f31a13c8d88f34f9258a46dcba437dc1dd5f3817f2d5ab6313e37bb6b519f688",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/rlinf/models/embodiment/gr00t/gr00t_n1d7/__init__.py",
+      "destination": "rlinf/models/embodiment/gr00t/gr00t_n1d7/__init__.py",
+      "source_size": 3913,
+      "source_mtime_ns": 1792131233000000000,
+      "source_sha256": "cb9a5871298cb13d4f546f9ca92d48d5e00c7c54110339e9a1e6efe6ec3f187c",
+      "stored_size": 3913,
+      "stored_sha256": "cb9a5871298cb13d4f546f9ca92d48d5e00c7c54110339e9a1e6efe6ec3f187c",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/examples/sft/config/robocasa_bowlandcup_gr00t_sequence_sft.yaml",
+      "destination": "examples/sft/config/robocasa_bowlandcup_gr00t_sequence_sft.yaml",
+      "source_size": 3136,
+      "source_mtime_ns": 1792211343000000000,
+      "source_sha256": "33577d85165b2e6d134768c93b170a9f05ba762dd248c6199fd1e11e396d3916",
+      "stored_size": 3136,
+      "stored_sha256": "33577d85165b2e6d134768c93b170a9f05ba762dd248c6199fd1e11e396d3916",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/rlinf/data/datasets/gr00t_n1d7/__init__.py",
+      "destination": "rlinf/data/datasets/gr00t_n1d7/__init__.py",
+      "source_size": 72,
+      "source_mtime_ns": 1792130843000000000,
+      "source_sha256": "3592f7b1da66c60f447ce5554c084c424f90d3797deacf955e29da1e406ae297",
+      "stored_size": 72,
+      "stored_sha256": "3592f7b1da66c60f447ce5554c084c424f90d3797deacf955e29da1e406ae297",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/rlinf/data/datasets/gr00t_n1d7/sequence_dataset.py",
+      "destination": "rlinf/data/datasets/gr00t_n1d7/sequence_dataset.py",
+      "source_size": 16734,
+      "source_mtime_ns": 1792240767000000000,
+      "source_sha256": "87602f6c0e8ef0416db318b613d832f455ed214a5aaeec5019b0354f55ca78c2",
+      "stored_size": 16734,
+      "stored_sha256": "87602f6c0e8ef0416db318b613d832f455ed214a5aaeec5019b0354f55ca78c2",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/rlinf/data/datasets/gr00t_n1d7/window_dataset.py",
+      "destination": "rlinf/data/datasets/gr00t_n1d7/window_dataset.py",
+      "source_size": 7340,
+      "source_mtime_ns": 1792255182000000000,
+      "source_sha256": "aa1876d7baf5cc182bb7571b99c143d97858e524c487e6d8f6031213f73c61fc",
+      "stored_size": 7340,
+      "stored_sha256": "aa1876d7baf5cc182bb7571b99c143d97858e524c487e6d8f6031213f73c61fc",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/rlinf/data/datasets/gr00t_n1d7/window_sampling.py",
+      "destination": "rlinf/data/datasets/gr00t_n1d7/window_sampling.py",
+      "source_size": 7801,
+      "source_mtime_ns": 1792255182000000000,
+      "source_sha256": "cd1ab4dfd72fbfcc4a447e852211d2ca00edf6a884479a6d87286eb067271a9b",
+      "stored_size": 7801,
+      "stored_sha256": "cd1ab4dfd72fbfcc4a447e852211d2ca00edf6a884479a6d87286eb067271a9b",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/rlinf/models/embodiment/gr00t/gr00t_n1d7/sft.py",
+      "destination": "rlinf/models/embodiment/gr00t/gr00t_n1d7/sft.py",
+      "source_size": 6657,
+      "source_mtime_ns": 1792139506000000000,
+      "source_sha256": "8bcb5bd4c9f6ea66e9d1f28c7b570a9e3ac6ad4aae06b9e91ad2fc61ea20cfb7",
+      "stored_size": 6657,
+      "stored_sha256": "8bcb5bd4c9f6ea66e9d1f28c7b570a9e3ac6ad4aae06b9e91ad2fc61ea20cfb7",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/rlinf/workers/sft/fsdp_gr00t_sequence_sft_worker.py",
+      "destination": "rlinf/workers/sft/fsdp_gr00t_sequence_sft_worker.py",
+      "source_size": 18192,
+      "source_mtime_ns": 1792255087000000000,
+      "source_sha256": "b11a9adcff97c89414c2c330eb57d62405565494809562e67e396690837a3551",
+      "stored_size": 18192,
+      "stored_sha256": "b11a9adcff97c89414c2c330eb57d62405565494809562e67e396690837a3551",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/tests/unit_tests/test_gr00t_sequence_sft.py",
+      "destination": "tests/unit_tests/test_gr00t_sequence_sft.py",
+      "source_size": 19060,
+      "source_mtime_ns": 1792240979000000000,
+      "source_sha256": "9549947de56e5cab35fb892e0d24b8085ff3bb2d3ca001854f0eb90d6a47142d",
+      "stored_size": 19060,
+      "stored_sha256": "9549947de56e5cab35fb892e0d24b8085ff3bb2d3ca001854f0eb90d6a47142d",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/tests/unit_tests/test_gr00t_window_dataset.py",
+      "destination": "tests/unit_tests/test_gr00t_window_dataset.py",
+      "source_size": 7401,
+      "source_mtime_ns": 1792255182000000000,
+      "source_sha256": "0af51fb465dd74101bfb1de3819ee504b433121ba04cef56857582b870c38671",
+      "stored_size": 7401,
+      "stored_sha256": "0af51fb465dd74101bfb1de3819ee504b433121ba04cef56857582b870c38671",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/tests/unit_tests/test_gr00t_window_integration.py",
+      "destination": "tests/unit_tests/test_gr00t_window_integration.py",
+      "source_size": 3549,
+      "source_mtime_ns": 1792255182000000000,
+      "source_sha256": "3ed25cb72dbec20be6953adce348cf3f3883d581ca19a58062dcff3b6102c9e7",
+      "stored_size": 3549,
+      "stored_sha256": "3ed25cb72dbec20be6953adce348cf3f3883d581ca19a58062dcff3b6102c9e7",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/RLinf/tests/unit_tests/test_gr00t_window_sampling.py",
+      "destination": "tests/unit_tests/test_gr00t_window_sampling.py",
+      "source_size": 6951,
+      "source_mtime_ns": 1792255182000000000,
+      "source_sha256": "5b575cb626756879675cf7977a8fb0e407eea5361abdf296bc1aeb04989d37cd",
+      "stored_size": 6951,
+      "stored_sha256": "5b575cb626756879675cf7977a8fb0e407eea5361abdf296bc1aeb04989d37cd",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/run_experiment.sh",
+      "destination": "experiments/baseline-sft-1019/run_experiment.sh",
+      "source_size": 5570,
+      "source_mtime_ns": 1792254959000000000,
+      "source_sha256": "a318f22f112c1ba268b38b59a1b3c5fa9d8243bdbafbf08fae59458485bb1977",
+      "stored_size": 5570,
+      "stored_sha256": "a318f22f112c1ba268b38b59a1b3c5fa9d8243bdbafbf08fae59458485bb1977",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/migration.md",
+      "destination": "experiments/baseline-sft-1019/migration.md",
+      "source_size": 8632,
+      "source_mtime_ns": 1792255627000000000,
+      "source_sha256": "71bcfe4ff96dcdb48284eb3dd5360923a6ceae3471b97459eb01fc2adeb3c639",
+      "stored_size": 8632,
+      "stored_sha256": "71bcfe4ff96dcdb48284eb3dd5360923a6ceae3471b97459eb01fc2adeb3c639",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/source_environment.json",
+      "destination": "experiments/baseline-sft-1019/source_environment.json",
+      "source_size": 476,
+      "source_mtime_ns": 1792236972000000000,
+      "source_sha256": "d8b4154bc241df571445b5cad60d67507bf69c0f9a7eda4dfedbc82be8873156",
+      "stored_size": 476,
+      "stored_sha256": "d8b4154bc241df571445b5cad60d67507bf69c0f9a7eda4dfedbc82be8873156",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/code/source_models.sha256",
+      "destination": "experiments/baseline-sft-1019/source_models.sha256",
+      "source_size": 10370,
+      "source_mtime_ns": 1792236851000000000,
+      "source_sha256": "350707445df45025c0e0f44ad3ac08df5b845bdfd0134c9e565f990d25b40aa4",
+      "stored_size": 10370,
+      "stored_sha256": "350707445df45025c0e0f44ad3ac08df5b845bdfd0134c9e565f990d25b40aa4",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/assets_verified.log",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/assets_verified.log",
+      "source_size": 5038,
+      "source_mtime_ns": 1792382149000000000,
+      "source_sha256": "4feb6c474348cbb6a54fbe832215117f8617664bcf6662e07fa1de30fa0ac53d",
+      "stored_size": 5038,
+      "stored_sha256": "4feb6c474348cbb6a54fbe832215117f8617664bcf6662e07fa1de30fa0ac53d",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/assets_verified.log.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/assets_verified.log.before_resume6000",
+      "source_size": 5038,
+      "source_mtime_ns": 1792255377000000000,
+      "source_sha256": "4feb6c474348cbb6a54fbe832215117f8617664bcf6662e07fa1de30fa0ac53d",
+      "stored_size": 5038,
+      "stored_sha256": "4feb6c474348cbb6a54fbe832215117f8617664bcf6662e07fa1de30fa0ac53d",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/config.yaml",
+      "destination": "experiments/baseline-sft-1019/sequence128/config.yaml",
+      "source_size": 3200,
+      "source_mtime_ns": 1792381814000000000,
+      "source_sha256": "7148aa41c7f690b6de1ec33bff43f905e0d9c91b92c7bfe8617ef128d0052fab",
+      "stored_size": 3200,
+      "stored_sha256": "7148aa41c7f690b6de1ec33bff43f905e0d9c91b92c7bfe8617ef128d0052fab",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/config.yaml.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/config.yaml.before_resume6000",
+      "source_size": 3116,
+      "source_mtime_ns": 1792236592000000000,
+      "source_sha256": "e67eeb9dcb7b297a56d0425e368e501d50cbf55f6c8802d28fba2c041350bc3c",
+      "stored_size": 3116,
+      "stored_sha256": "e67eeb9dcb7b297a56d0425e368e501d50cbf55f6c8802d28fba2c041350bc3c",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/exit_code",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/exit_code",
+      "source_size": 4,
+      "source_mtime_ns": 1792391369000000000,
+      "source_sha256": "e726b440cc164001999e718b51780d80314709efe06e7857282377be9111127b",
+      "stored_size": 4,
+      "stored_sha256": "e726b440cc164001999e718b51780d80314709efe06e7857282377be9111127b",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/exit_code.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/exit_code.before_resume6000",
+      "source_size": 4,
+      "source_mtime_ns": 1792335386000000000,
+      "source_sha256": "ce8bafb38615aeb5d44ebbabe78ec14ac35a5de87bdc5ad5ea82a72656024ce4",
+      "stored_size": 4,
+      "stored_sha256": "ce8bafb38615aeb5d44ebbabe78ec14ac35a5de87bdc5ad5ea82a72656024ce4",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/launch.log",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/launch.log",
+      "source_size": 393,
+      "source_mtime_ns": 1792391369000000000,
+      "source_sha256": "70e4a4750cc318fcfe7bb338259db2d9fa07e2c77a8dc8ab01d4a77ae18b7279",
+      "stored_size": 393,
+      "stored_sha256": "70e4a4750cc318fcfe7bb338259db2d9fa07e2c77a8dc8ab01d4a77ae18b7279",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/launch.log.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/launch.log.before_resume6000",
+      "source_size": 215,
+      "source_mtime_ns": 1792255377000000000,
+      "source_sha256": "6f1ba9222a5910c6b11ef7c3cfbcc2930c7cdc301f1db562fe8a76877f67932a",
+      "stored_size": 215,
+      "stored_sha256": "6f1ba9222a5910c6b11ef7c3cfbcc2930c7cdc301f1db562fe8a76877f67932a",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/launcher.pid",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/launcher.pid",
+      "source_size": 7,
+      "source_mtime_ns": 1792382150000000000,
+      "source_sha256": "4d3ddbfa2ebc348570c6cd54ba18956e8d4dd0eceedfd195c7c2ca2b894b7a9b",
+      "stored_size": 7,
+      "stored_sha256": "4d3ddbfa2ebc348570c6cd54ba18956e8d4dd0eceedfd195c7c2ca2b894b7a9b",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/launcher.pid.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/launcher.pid.before_resume6000",
+      "source_size": 8,
+      "source_mtime_ns": 1792255377000000000,
+      "source_sha256": "91113b0693032ca0b1663714a53001c366507927c62cb8c0813994d736dcb026",
+      "stored_size": 8,
+      "stored_sha256": "91113b0693032ca0b1663714a53001c366507927c62cb8c0813994d736dcb026",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_metrics.jsonl",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_metrics.jsonl",
+      "source_size": 1609827,
+      "source_mtime_ns": 1792391360000000000,
+      "source_sha256": "2249b2269211e3bcbc1d0c1bcb53def6374ff9621668e23bdad6bf32d15b14b5",
+      "stored_size": 1609827,
+      "stored_sha256": "2249b2269211e3bcbc1d0c1bcb53def6374ff9621668e23bdad6bf32d15b14b5",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_metrics.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_metrics.jsonl.before_resume6000",
+      "source_size": 1660087,
+      "source_mtime_ns": 1792335368000000000,
+      "source_sha256": "c97caa0a6c4e2a0821f423da65c4d031755881606d9ca6806c66b90d65bc3522",
+      "stored_size": 1660087,
+      "stored_sha256": "c97caa0a6c4e2a0821f423da65c4d031755881606d9ca6806c66b90d65bc3522",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_samples_rank0.jsonl",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_samples_rank0.jsonl.gz",
+      "source_size": 10191356,
+      "source_mtime_ns": 1792391360000000000,
+      "source_sha256": "c2ca49a361ff1f77d875f111ecde719536c7815a384426607c52bdf6d0ad6b4e",
+      "stored_size": 457227,
+      "stored_sha256": "d07a81307b6e90561a7ee314c550903aa7a791200dfa61301254cc04265428dd",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_samples_rank0.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_samples_rank0.jsonl.before_resume6000.gz",
+      "source_size": 10506843,
+      "source_mtime_ns": 1792335368000000000,
+      "source_sha256": "3d229106173854f5ad068fc873c2dd1cf8b59952dc91aeab603b140dd916187d",
+      "stored_size": 471213,
+      "stored_sha256": "c2bf316ae3fd5c6d74afcc8027239f0013948aabfa54714f0c7f58da0a4b6e25",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_samples_rank1.jsonl",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_samples_rank1.jsonl.gz",
+      "source_size": 10189564,
+      "source_mtime_ns": 1792391360000000000,
+      "source_sha256": "a7b166a109076ae6884c3631d36cf13cc689e5dbf17de530da1c9533e0f86fb4",
+      "stored_size": 457715,
+      "stored_sha256": "f0d9e49bead1b1f4abef808bfdabb9ee558fc6d3da5e034a98e67c5f40e7044c",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_samples_rank1.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_samples_rank1.jsonl.before_resume6000.gz",
+      "source_size": 10507380,
+      "source_mtime_ns": 1792335368000000000,
+      "source_sha256": "ec3ee4cff36bb36ccd58c6f05297da83821597c50b6b31342b129a3f44c0cfea",
+      "stored_size": 471536,
+      "stored_sha256": "8df968d0e7d3893963feba99f3b340102f6ec87c07d7193074bfb02461b07c5d",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_samples_rank2.jsonl",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_samples_rank2.jsonl.gz",
+      "source_size": 10186412,
+      "source_mtime_ns": 1792391360000000000,
+      "source_sha256": "24e7b47061ecccfae5eac248bfccf354b236df32805cd174d8c7065f886339e6",
+      "stored_size": 454170,
+      "stored_sha256": "76f0df60f038c27f8fe66fea721e7a371a113a51a62a3dcf2d5df4367d321933",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_samples_rank2.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_samples_rank2.jsonl.before_resume6000.gz",
+      "source_size": 10505962,
+      "source_mtime_ns": 1792335368000000000,
+      "source_sha256": "5022c1c4e137197826b9a200d7a1f410f52238dc3b742485c6632b084d36c427",
+      "stored_size": 468727,
+      "stored_sha256": "122c163aacab459874609ecc59c8f3ebe6ddd690349d4ae407d08545aa1d5fbc",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_samples_rank3.jsonl",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_samples_rank3.jsonl.gz",
+      "source_size": 10180141,
+      "source_mtime_ns": 1792391360000000000,
+      "source_sha256": "3e7315938c5a2686bf1aab3bf27c1ef12df8199c6cf5a3929e0f12436553c0f9",
+      "stored_size": 457068,
+      "stored_sha256": "300a260755c983290b09fd415cc9cb6008a19e4bf45aa84ec9deec923d163220",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/sequence_samples_rank3.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/sequence_samples_rank3.jsonl.before_resume6000.gz",
+      "source_size": 10499702,
+      "source_mtime_ns": 1792335368000000000,
+      "source_sha256": "4b70b3071729f94df9c4b27cc8e155e48d8c351588026abd0fbcf7a803688b96",
+      "stored_size": 470834,
+      "stored_sha256": "bbe72ffa6bd9bd37287e6164a173217b187246c657c43d1af811a93c41baf3d7",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/started.json",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/started.json",
+      "source_size": 125088,
+      "source_mtime_ns": 1792382149000000000,
+      "source_sha256": "2d91b9239b0367a76847a388f3d58b47f26cfb6902f99a445867cc40a162a90f",
+      "stored_size": 125088,
+      "stored_sha256": "2d91b9239b0367a76847a388f3d58b47f26cfb6902f99a445867cc40a162a90f",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/started.json.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/started.json.before_resume6000",
+      "source_size": 117751,
+      "source_mtime_ns": 1792255377000000000,
+      "source_sha256": "4c35ba8f7e21b4956570f968ea307d6b51879842bd8a172e206a329607e054e0",
+      "stored_size": 117751,
+      "stored_sha256": "4c35ba8f7e21b4956570f968ea307d6b51879842bd8a172e206a329607e054e0",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/train.log",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/train.log",
+      "source_size": 1186014,
+      "source_mtime_ns": 1792391369000000000,
+      "source_sha256": "5ad9acbfa843173d81bc479595015436bc3bb1dfda86a0c653fd87482558d154",
+      "stored_size": 1186014,
+      "stored_sha256": "5ad9acbfa843173d81bc479595015436bc3bb1dfda86a0c653fd87482558d154",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/train.log.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/logs/train.log.before_resume6000",
+      "source_size": 8269519,
+      "source_mtime_ns": 1792335381000000000,
+      "source_sha256": "10452c6c1b5b40191b9ba451a5a81a2d1f1929fd67733bf76100f4164bc5e71c",
+      "stored_size": 8269519,
+      "stored_sha256": "10452c6c1b5b40191b9ba451a5a81a2d1f1929fd67733bf76100f4164bc5e71c",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/tensorboard/config.yaml",
+      "destination": "experiments/baseline-sft-1019/sequence128/tensorboard/config.yaml",
+      "source_size": 2713,
+      "source_mtime_ns": 1792382191000000000,
+      "source_sha256": "fbde4e74e55ac41a174ed5d966819ed70802e9c6ea71ae306677544fa0cbb14d",
+      "stored_size": 2713,
+      "stored_sha256": "fbde4e74e55ac41a174ed5d966819ed70802e9c6ea71ae306677544fa0cbb14d",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/tensorboard/config.yaml.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/sequence128/tensorboard/config.yaml.before_resume6000",
+      "source_size": 2629,
+      "source_mtime_ns": 1792255424000000000,
+      "source_sha256": "2b7f53948e1b4b9e5680ca725d5105c59315a411333ce2059c0ac114c1de8290",
+      "stored_size": 2629,
+      "stored_sha256": "2b7f53948e1b4b9e5680ca725d5105c59315a411333ce2059c0ac114c1de8290",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/tensorboard/events.out.tfevents.1792255424.is-ddpud3khcltaenai-devmachine-0.4044899.0",
+      "destination": "experiments/baseline-sft-1019/sequence128/tensorboard/events.out.tfevents.1792255424.is-ddpud3khcltaenai-devmachine-0.4044899.0",
+      "source_size": 3519415,
+      "source_mtime_ns": 1792335357000000000,
+      "source_sha256": "988a049d3e8607e71c87ebbbe63026ad4e860a9f6a1efeec0f4856add949a1e5",
+      "stored_size": 3519415,
+      "stored_sha256": "988a049d3e8607e71c87ebbbe63026ad4e860a9f6a1efeec0f4856add949a1e5",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/tensorboard/events.out.tfevents.1792381803.is-ddpud3khcltaenai-devmachine-0.872638.0",
+      "destination": "experiments/baseline-sft-1019/sequence128/tensorboard/events.out.tfevents.1792381803.is-ddpud3khcltaenai-devmachine-0.872638.0",
+      "source_size": 163,
+      "source_mtime_ns": 1792381803000000000,
+      "source_sha256": "efbe617159e95627cf9f032f0a4f3a58c95946b17e7f9d6d1186ffa87ac21d21",
+      "stored_size": 163,
+      "stored_sha256": "efbe617159e95627cf9f032f0a4f3a58c95946b17e7f9d6d1186ffa87ac21d21",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/tensorboard/events.out.tfevents.1792382033.is-ddpud3khcltaenai-devmachine-0.872871.0",
+      "destination": "experiments/baseline-sft-1019/sequence128/tensorboard/events.out.tfevents.1792382033.is-ddpud3khcltaenai-devmachine-0.872871.0",
+      "source_size": 163,
+      "source_mtime_ns": 1792382033000000000,
+      "source_sha256": "41a3f075a145bf1ecdc950d6d130654e6cae768a102e917335541ae8adbfae90",
+      "stored_size": 163,
+      "stored_sha256": "41a3f075a145bf1ecdc950d6d130654e6cae768a102e917335541ae8adbfae90",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/sequence128/tensorboard/events.out.tfevents.1792382191.is-ddpud3khcltaenai-devmachine-0.873120.0",
+      "destination": "experiments/baseline-sft-1019/sequence128/tensorboard/events.out.tfevents.1792382191.is-ddpud3khcltaenai-devmachine-0.873120.0",
+      "source_size": 396452,
+      "source_mtime_ns": 1792391360000000000,
+      "source_sha256": "92c4d289ff6f327035dc3a2924c614d06239e868970429cf6db26f1d6131b8c6",
+      "stored_size": 396452,
+      "stored_sha256": "92c4d289ff6f327035dc3a2924c614d06239e868970429cf6db26f1d6131b8c6",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/assets_verified.log",
+      "destination": "experiments/baseline-sft-1019/h40/logs/assets_verified.log",
+      "source_size": 5038,
+      "source_mtime_ns": 1792382149000000000,
+      "source_sha256": "4feb6c474348cbb6a54fbe832215117f8617664bcf6662e07fa1de30fa0ac53d",
+      "stored_size": 5038,
+      "stored_sha256": "4feb6c474348cbb6a54fbe832215117f8617664bcf6662e07fa1de30fa0ac53d",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/assets_verified.log.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/assets_verified.log.before_resume6000",
+      "source_size": 5038,
+      "source_mtime_ns": 1792255377000000000,
+      "source_sha256": "4feb6c474348cbb6a54fbe832215117f8617664bcf6662e07fa1de30fa0ac53d",
+      "stored_size": 5038,
+      "stored_sha256": "4feb6c474348cbb6a54fbe832215117f8617664bcf6662e07fa1de30fa0ac53d",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/config.yaml",
+      "destination": "experiments/baseline-sft-1019/h40/config.yaml",
+      "source_size": 3410,
+      "source_mtime_ns": 1792381814000000000,
+      "source_sha256": "6237dbd6129df33bda2fca8789b8a50670c208ffd62265fed55609b57e0e055e",
+      "stored_size": 3410,
+      "stored_sha256": "6237dbd6129df33bda2fca8789b8a50670c208ffd62265fed55609b57e0e055e",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/config.yaml.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/config.yaml.before_resume6000",
+      "source_size": 3342,
+      "source_mtime_ns": 1792254959000000000,
+      "source_sha256": "527cae328d25a6f7c3983aaf8be35c38a7e8238fe715eae4058946c5068684eb",
+      "stored_size": 3342,
+      "stored_sha256": "527cae328d25a6f7c3983aaf8be35c38a7e8238fe715eae4058946c5068684eb",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/exit_code",
+      "destination": "experiments/baseline-sft-1019/h40/logs/exit_code",
+      "source_size": 2,
+      "source_mtime_ns": 1792391366000000000,
+      "source_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "stored_size": 2,
+      "stored_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/exit_code.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/exit_code.before_resume6000",
+      "source_size": 2,
+      "source_mtime_ns": 1792334342000000000,
+      "source_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "stored_size": 2,
+      "stored_sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/launch.log",
+      "destination": "experiments/baseline-sft-1019/h40/logs/launch.log",
+      "source_size": 215,
+      "source_mtime_ns": 1792382149000000000,
+      "source_sha256": "3059aad3557c16c8a1d1beeb125a1e7f1b6df9f3fc03006162865f19a5b36249",
+      "stored_size": 215,
+      "stored_sha256": "3059aad3557c16c8a1d1beeb125a1e7f1b6df9f3fc03006162865f19a5b36249",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/launch.log.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/launch.log.before_resume6000",
+      "source_size": 215,
+      "source_mtime_ns": 1792255377000000000,
+      "source_sha256": "3059aad3557c16c8a1d1beeb125a1e7f1b6df9f3fc03006162865f19a5b36249",
+      "stored_size": 215,
+      "stored_sha256": "3059aad3557c16c8a1d1beeb125a1e7f1b6df9f3fc03006162865f19a5b36249",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/launcher.pid",
+      "destination": "experiments/baseline-sft-1019/h40/logs/launcher.pid",
+      "source_size": 7,
+      "source_mtime_ns": 1792382150000000000,
+      "source_sha256": "7c3135bedd45eef0dfaa95789544a99d42b595a464cb84ceef5a92b119fdb145",
+      "stored_size": 7,
+      "stored_sha256": "7c3135bedd45eef0dfaa95789544a99d42b595a464cb84ceef5a92b119fdb145",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/launcher.pid.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/launcher.pid.before_resume6000",
+      "source_size": 8,
+      "source_mtime_ns": 1792255377000000000,
+      "source_sha256": "2bf95e621a074723ba9af2f86fcdf7e00b8addefed5db26c9b483f10d4172270",
+      "stored_size": 8,
+      "stored_sha256": "2bf95e621a074723ba9af2f86fcdf7e00b8addefed5db26c9b483f10d4172270",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_metrics.jsonl",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_metrics.jsonl",
+      "source_size": 1942251,
+      "source_mtime_ns": 1792391361000000000,
+      "source_sha256": "f4513b98eb2abf25a5f7073473496c2c60be39f19879387ef73a1861acfae747",
+      "stored_size": 1942251,
+      "stored_sha256": "f4513b98eb2abf25a5f7073473496c2c60be39f19879387ef73a1861acfae747",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_metrics.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_metrics.jsonl.before_resume6000",
+      "source_size": 1957999,
+      "source_mtime_ns": 1792334332000000000,
+      "source_sha256": "d1a69bc76441e69dc5977a15333fcf8fa0923141f412abf334599895cbd50a27",
+      "stored_size": 1957999,
+      "stored_sha256": "d1a69bc76441e69dc5977a15333fcf8fa0923141f412abf334599895cbd50a27",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_samples_rank0.jsonl",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_samples_rank0.jsonl.gz",
+      "source_size": 374745964,
+      "source_mtime_ns": 1792391361000000000,
+      "source_sha256": "57fd8a0c03c245a097e3c61c6957fade269c694287d6ef3f805beb9077908c2b",
+      "stored_size": 30716143,
+      "stored_sha256": "b17865676f8ed021e3b7275cb659ef62ffbebdbee0c9ec25c30e49e8990e8337",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_samples_rank0.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_samples_rank0.jsonl.before_resume6000.gz",
+      "source_size": 377793903,
+      "source_mtime_ns": 1792334332000000000,
+      "source_sha256": "1a280cae1b1c3e89f8ff02b1774c8b1e182bc370a286a5d4b41e5141b2e7a20a",
+      "stored_size": 30965399,
+      "stored_sha256": "a9f232e852c0b86b2f77b28aa9c1776bddd813d840718abc314625234be66547",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_samples_rank1.jsonl",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_samples_rank1.jsonl.gz",
+      "source_size": 369205739,
+      "source_mtime_ns": 1792391361000000000,
+      "source_sha256": "526d35bd66d14c1cff979dd8297acbe2c7bca8e331d02376ef5ea57ad9f8c667",
+      "stored_size": 30261829,
+      "stored_sha256": "dfd9a132f5b4e9a3421ca30783a52ed6f30ab2f8a6e47de453d0ef4459cf97ef",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_samples_rank1.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_samples_rank1.jsonl.before_resume6000.gz",
+      "source_size": 372211959,
+      "source_mtime_ns": 1792334332000000000,
+      "source_sha256": "7f162d915e556eeea2de4f9bc307f0c898e9f0a583cdf6e73bcbda7fec885a77",
+      "stored_size": 30508109,
+      "stored_sha256": "64ca14214437aff4292be0e7622ddb3fe0c9815ae9505539e1c72a4ab0f62bc0",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_samples_rank2.jsonl",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_samples_rank2.jsonl.gz",
+      "source_size": 362911186,
+      "source_mtime_ns": 1792391361000000000,
+      "source_sha256": "eb731e2f52e4fdf912325615b0b8c45b70acf56ecf3bc12238204bd370b09110",
+      "stored_size": 29755635,
+      "stored_sha256": "631a59272ef46fcc20f8e1e0346494ec1a7b5ea34509fe04a6c3867b1e66db58",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_samples_rank2.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_samples_rank2.jsonl.before_resume6000.gz",
+      "source_size": 365846256,
+      "source_mtime_ns": 1792334332000000000,
+      "source_sha256": "e40f082b5e0538436c275b6fd9785dafa1b005d29d5510f009498d90e15fa49e",
+      "stored_size": 29996025,
+      "stored_sha256": "eefeeb7a1c6f80317838765d47d1c705033312246859b54d5308bff075229022",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_samples_rank3.jsonl",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_samples_rank3.jsonl.gz",
+      "source_size": 356502981,
+      "source_mtime_ns": 1792391361000000000,
+      "source_sha256": "adc69dc2f61403ea5f12bd8b9b4020aecedb4aec0a6d9dc18814c32546f9e27d",
+      "stored_size": 29230811,
+      "stored_sha256": "011a10112827970ab25222d8887fdc050f96d52a478b290b91fc3ff09a389d3a",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/sequence_samples_rank3.jsonl.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/sequence_samples_rank3.jsonl.before_resume6000.gz",
+      "source_size": 359345778,
+      "source_mtime_ns": 1792334332000000000,
+      "source_sha256": "be5314c48125858ff94881ea4097825ff1c1ed8d108b0b02192c247092c740ce",
+      "stored_size": 29463537,
+      "stored_sha256": "145add7d5e57be2967c08087bb1667c989b1c1a0258a94966666e4373f9219de",
+      "gzip": true
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/started.json",
+      "destination": "experiments/baseline-sft-1019/h40/logs/started.json",
+      "source_size": 125253,
+      "source_mtime_ns": 1792382149000000000,
+      "source_sha256": "b8cc9c80abcf670ac137316e0c63839828243838dcf1cfbc28d968d59dd6514f",
+      "stored_size": 125253,
+      "stored_sha256": "b8cc9c80abcf670ac137316e0c63839828243838dcf1cfbc28d968d59dd6514f",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/started.json.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/started.json.before_resume6000",
+      "source_size": 117932,
+      "source_mtime_ns": 1792255377000000000,
+      "source_sha256": "5d076a378c7f412d15c723c759da8c6be524963c89970f81f208412cc70b2c3c",
+      "stored_size": 117932,
+      "stored_sha256": "5d076a378c7f412d15c723c759da8c6be524963c89970f81f208412cc70b2c3c",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/train.log",
+      "destination": "experiments/baseline-sft-1019/h40/logs/train.log",
+      "source_size": 1118260,
+      "source_mtime_ns": 1792391366000000000,
+      "source_sha256": "638636ae5e6924c306cfee43c4febfa9211bfc4e11bed6f6168efb53f4fb59c4",
+      "stored_size": 1118260,
+      "stored_sha256": "638636ae5e6924c306cfee43c4febfa9211bfc4e11bed6f6168efb53f4fb59c4",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/train.log.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/logs/train.log.before_resume6000",
+      "source_size": 7707369,
+      "source_mtime_ns": 1792334336000000000,
+      "source_sha256": "f21a9c18593e8772344381c074582233539a08f1869af977a9e893cc3e87578b",
+      "stored_size": 7707369,
+      "stored_sha256": "f21a9c18593e8772344381c074582233539a08f1869af977a9e893cc3e87578b",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/tensorboard/config.yaml",
+      "destination": "experiments/baseline-sft-1019/h40/tensorboard/config.yaml",
+      "source_size": 2839,
+      "source_mtime_ns": 1792382191000000000,
+      "source_sha256": "c16cf7be6417567c9de1e6bcc0181d44021f46d7a3c037b2e7118d3ecbf18fef",
+      "stored_size": 2839,
+      "stored_sha256": "c16cf7be6417567c9de1e6bcc0181d44021f46d7a3c037b2e7118d3ecbf18fef",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/tensorboard/config.yaml.before_resume6000",
+      "destination": "experiments/baseline-sft-1019/h40/tensorboard/config.yaml.before_resume6000",
+      "source_size": 2771,
+      "source_mtime_ns": 1792255424000000000,
+      "source_sha256": "c2f08073e11f1eb9e3821aa1fb4c3433edf2ea482cf0298fdb368ca29e4ad4ae",
+      "stored_size": 2771,
+      "stored_sha256": "c2f08073e11f1eb9e3821aa1fb4c3433edf2ea482cf0298fdb368ca29e4ad4ae",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/tensorboard/events.out.tfevents.1792255424.is-ddpud3khcltaenai-devmachine-0.4044898.0",
+      "destination": "experiments/baseline-sft-1019/h40/tensorboard/events.out.tfevents.1792255424.is-ddpud3khcltaenai-devmachine-0.4044898.0",
+      "source_size": 4227047,
+      "source_mtime_ns": 1792334320000000000,
+      "source_sha256": "ad1d925df55e5105b4cab6cb58b29f0e0dfd32016b53aec5d877f59c442656b7",
+      "stored_size": 4227047,
+      "stored_sha256": "ad1d925df55e5105b4cab6cb58b29f0e0dfd32016b53aec5d877f59c442656b7",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/tensorboard/events.out.tfevents.1792381813.is-ddpud3khcltaenai-devmachine-0.872638.1",
+      "destination": "experiments/baseline-sft-1019/h40/tensorboard/events.out.tfevents.1792381813.is-ddpud3khcltaenai-devmachine-0.872638.1",
+      "source_size": 163,
+      "source_mtime_ns": 1792381813000000000,
+      "source_sha256": "9badf557f45c192d5d63e942515aecfc71f12eb3355cd052695bc9a715714df3",
+      "stored_size": 163,
+      "stored_sha256": "9badf557f45c192d5d63e942515aecfc71f12eb3355cd052695bc9a715714df3",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/tensorboard/events.out.tfevents.1792382034.is-ddpud3khcltaenai-devmachine-0.872871.1",
+      "destination": "experiments/baseline-sft-1019/h40/tensorboard/events.out.tfevents.1792382034.is-ddpud3khcltaenai-devmachine-0.872871.1",
+      "source_size": 163,
+      "source_mtime_ns": 1792382034000000000,
+      "source_sha256": "1bc70b0d5c04c26bdd733170d43e7079dc9aa0c9a2c87cd5196057deff9e8ddc",
+      "stored_size": 163,
+      "stored_sha256": "1bc70b0d5c04c26bdd733170d43e7079dc9aa0c9a2c87cd5196057deff9e8ddc",
+      "gzip": false
+    },
+    {
+      "source": "/mnt/public/chenzm/robottt/h800_sft/h40/tensorboard/events.out.tfevents.1792382191.is-ddpud3khcltaenai-devmachine-0.873121.0",
+      "destination": "experiments/baseline-sft-1019/h40/tensorboard/events.out.tfevents.1792382191.is-ddpud3khcltaenai-devmachine-0.873121.0",
+      "source_size": 481051,
+      "source_mtime_ns": 1792391361000000000,
+      "source_sha256": "9c2734f3eb820ee5b0748d26706757fbda2404d73ded0b7c2cdb1b8898a666b7",
+      "stored_size": 481051,
+      "stored_sha256": "9c2734f3eb820ee5b0748d26706757fbda2404d73ded0b7c2cdb1b8898a666b7",
+      "gzip": false
+    }
+  ],
+  "credential_scan_rules": [
+    "private_key",
+    "github_token",
+    "hf_token",
+    "aws_access_key",
+    "secret_assignment"
+  ],
+  "finished_utc": "2026-10-19T08:34:49.127992+00:00"
+}

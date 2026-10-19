@@ -1,0 +1,2 @@
+{"preflight": "passed", "gpu_uuids": ["GPU-f2c95c92-bcba-97da-b57a-68ffdcbdea10", "GPU-f267c9e1-260c-477e-4d8c-769153c32014", "GPU-4ebef19e-e41c-a029-4603-aa8a1b18b98c", "GPU-e431a274-fd98-b1be-398d-9b3e935f09ae"]}
+resume6000: line 109: 873120 Aborted                 (core dumped) python examples/sft/train_vla_sft.py --config-path "$run_dir" --config-name config > "$run_dir/train.log" 2>&1

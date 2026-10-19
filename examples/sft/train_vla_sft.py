@@ -42,7 +42,16 @@ def main(cfg) -> None:
     actor_placement = component_placement.get_strategy("actor")
 
     if cfg.actor.training_backend == "fsdp" or cfg.actor.training_backend == "fsdp2":
-        actor_group = FSDPVlaSftWorker.create_group(cfg).launch(
+        worker_cls = FSDPVlaSftWorker
+        if cfg.actor.model.model_type == "gr00t_n1d7" and cfg.actor.model.get(
+            "sequence_training", False
+        ):
+            from rlinf.workers.sft.fsdp_gr00t_sequence_sft_worker import (
+                FSDPGr00tSequenceSftWorker,
+            )
+
+            worker_cls = FSDPGr00tSequenceSftWorker
+        actor_group = worker_cls.create_group(cfg).launch(
             cluster, name=cfg.actor.group_name, placement_strategy=actor_placement
         )
 
