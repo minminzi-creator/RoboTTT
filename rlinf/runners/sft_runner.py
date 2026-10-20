@@ -17,6 +17,7 @@ import os
 from typing import TYPE_CHECKING, Optional, Union
 
 from omegaconf.dictconfig import DictConfig
+from omegaconf.listconfig import ListConfig
 from tqdm import tqdm
 
 from rlinf.scheduler import WorkerGroupFuncResult as Handle
@@ -55,6 +56,21 @@ class SFTRunner:
 
         # compute `max_steps`
         self.set_max_steps()
+
+        save_steps = cfg.runner.get("save_steps")
+        self.save_steps = None
+        if save_steps is not None:
+            if not isinstance(save_steps, (list, tuple, ListConfig)) or any(
+                type(step) is not int or not 0 < step <= self.max_steps
+                for step in save_steps
+            ):
+                raise ValueError(
+                    "runner.save_steps must be a list of positive integers "
+                    f"not greater than max_steps={self.max_steps}; got {save_steps!r}"
+                )
+            if len(set(save_steps)) != len(save_steps):
+                raise ValueError("runner.save_steps must not contain duplicate steps")
+            self.save_steps = frozenset(save_steps)
 
         self.timer = ScopedTimer(reduction="max", sync_cuda=False)
 
@@ -98,10 +114,12 @@ class SFTRunner:
                     self.global_step,
                     self.max_steps,
                     self.cfg.runner.val_check_interval,
-                    self.cfg.runner.save_interval,
+                    self.cfg.runner.save_interval if self.save_steps is None else -1,
                     1.0,
                     run_time_exceeded=False,
                 )
+                if self.save_steps is not None:
+                    save_model = self.global_step in self.save_steps
 
                 if save_model:
                     self._save_checkpoint()

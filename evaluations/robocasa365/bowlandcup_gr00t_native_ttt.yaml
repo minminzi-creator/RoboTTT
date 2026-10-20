@@ -1,0 +1,114 @@
+# Set checkpoint and output explicitly before executing a native trial.
+defaults:
+  - env/robocasa365@env.eval
+  - _self_
+  - override hydra/job_logging: stdout
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
+  searchpath:
+    - file://${oc.env:EMBODIED_PATH}/config/
+
+cluster:
+  num_nodes: 1
+  component_placement:
+    env,rollout: 0-7
+
+runner:
+  task_type: embodied_eval
+  only_eval: true
+  logger:
+    log_path: null
+    project_name: robottt
+    experiment_name: robottt3_native_eval
+    logger_backends: [tensorboard]
+  max_epochs: 1
+  max_steps: -1
+  val_check_interval: -1
+  save_interval: -1
+  resume_dir: null
+  ckpt_path: null
+
+env:
+  group_name: EnvGroup
+  enable_offload: false
+  eval:
+    task_names: [BowlAndCup]
+    task_soup: []
+    task_mode: null
+    task_sampling_strategy: ordered
+    total_num_envs: 8
+    rollout_epoch: 1
+    auto_reset: false
+    ignore_terminations: false
+    episode_horizon_source: max_episode_steps
+    max_steps_per_rollout_epoch: 2400
+    max_episode_steps: 2400
+    use_fixed_reset_state_ids: true
+    group_size: 1
+    is_eval: true
+    seed: 7
+    seed_strategy: global_unique
+    video_cfg:
+      save_video: true
+      info_on_video: true
+      extra_info_on_video: [episode.success_once, episode.episode_len]
+      video_base_dir: ${runner.logger.log_path}/video
+    init_params:
+      camera_heights: 256
+      camera_widths: 256
+    observation:
+      state_layout: [base_pos, base_quat, base_to_eef_pos, base_to_eef_quat, gripper_qpos]
+    action_space:
+      binarize_gripper_control: false
+
+rollout:
+  group_name: RolloutGroup
+  rollout_backend: huggingface
+  generation_backend: huggingface
+  native_gr00t_eval: true
+  memory_mode: carry
+  scene_seeds: [7, 8, 9, 10, 11, 12, 13, 14]
+  trial_id: 0
+  reference_dir: null
+  reference_batch_size: 8
+  preflight: false
+  recompute_logprobs: false
+  enable_offload: false
+  pipeline_stage_num: 1
+  cpu_threads: 4
+  model:
+    model_type: gr00t_n1d7
+    precision: fp32
+    is_lora: false
+    add_value_head: false
+    model_path: /mnt/public/chenzm/robottt/h800_sft/assets/GR00T-N1.7-3B
+    backbone_model_path: /mnt/public/chenzm/robottt/h800_sft/assets/Cosmos-Reason2-2B
+    dependency_path: /mnt/public/chenzm/robottt/h800_sft/code/Isaac-GR00T
+    dependency_commit: 23ace64f17aa5015259b8609d371eb61a357c776
+    embodiment_tag: new_embodiment
+    action_dim: 12
+    valid_action_dim: 12
+    num_action_chunks: 8
+    denoising_steps: 4
+    binary_action_threshold: 0.0
+    gradient_checkpointing: false
+    training_memory_source: predicted_final
+    rl_head_config:
+      use_ttt: true
+      disable_dropout: true
+      add_value_head: false
+      ttt:
+        hidden_size: 1536
+        num_heads: 32
+        mlp_ratio: 4
+        num_register_tokens: 16
+        tokens_per_anchor: 57
+        base_lr: 0.1
+        gate_init: 0.001
+        o_proj_std: 0.02
+        rope_theta: 10000.0
+        position_mode: flattened
+        compile_inner: true

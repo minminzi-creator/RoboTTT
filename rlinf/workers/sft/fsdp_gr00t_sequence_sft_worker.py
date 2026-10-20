@@ -15,6 +15,36 @@ from rlinf.utils.utils import seed_everything
 from rlinf.workers.sft.fsdp_vla_sft_worker import FSDPVlaSftWorker
 
 
+def sequence_policy_seeds(batch, start, end, seed, device):
+    """Derive independent per-anchor policy noise without advancing native RNG."""
+    import numpy as np
+
+    b, length = batch["anchor_valid"].shape
+    descriptions = batch["descriptions"]
+    if len(descriptions) != b or not 0 <= start < end <= length:
+        raise ValueError("Policy seeds require valid sequence descriptions and segment")
+    result = torch.zeros((b, end - start), dtype=torch.long)
+    for row, description in enumerate(descriptions):
+        anchors = description["anchors"]
+        for index in range(start, end):
+            if not batch["anchor_valid"][row, index]:
+                continue
+            if index >= len(anchors):
+                raise ValueError("Valid anchor is missing its sample identity")
+            result[row, index - start] = int(
+                np.random.SeedSequence(
+                    [
+                        seed,
+                        description["epoch"],
+                        description["episode"],
+                        anchors[index],
+                        90211,
+                    ]
+                ).generate_state(1)[0]
+            )
+    return result.to(device=device)
+
+
 def validate_resume_metadata(previous: dict, current: dict) -> None:
     """Reject resume across data, code, precision or optimization protocols."""
     # Match the checkpoint JSON representation, including integer mapping keys.
@@ -162,6 +192,8 @@ class FSDPGr00tSequenceSftWorker(FSDPVlaSftWorker):
         dependency = Path(gr00t.__file__).resolve().parent.parent
         names = [
             "examples/sft/train_vla_sft.py",
+            "rlinf/runners/sft_runner.py",
+            "rlinf/utils/runner_utils.py",
             "rlinf/data/datasets/gr00t_n1d7/sequence_dataset.py",
             "rlinf/data/datasets/gr00t_n1d7/window_dataset.py",
             "rlinf/data/datasets/gr00t_n1d7/window_sampling.py",
@@ -174,6 +206,17 @@ class FSDPGr00tSequenceSftWorker(FSDPVlaSftWorker):
             "rlinf/hybrid_engines/fsdp/strategy/base.py",
             "rlinf/hybrid_engines/fsdp/strategy/fsdp.py",
         ]
+        if self.cfg.actor.model.rl_head_config.use_ttt or (
+            self.cfg.actor.model.rl_head_config.ttt.num_register_tokens
+        ):
+            names += [
+                "rlinf/models/embodiment/gr00t/gr00t_n1d7/" + filename
+                for filename in ("native_ttt.py", "ttt.py", "rollout.py")
+            ]
+            names += [
+                "rlinf/hybrid_engines/fsdp/mixed_precision.py",
+                "rlinf/utils/fsdp_config.py",
+            ]
         dependency_names = [
             "gr00t/model/gr00t_n1d7/gr00t_n1d7.py",
             "gr00t/model/gr00t_n1d7/processing_gr00t_n1d7.py",
@@ -262,13 +305,25 @@ class FSDPGr00tSequenceSftWorker(FSDPVlaSftWorker):
         if segment_length <= 0 or length % segment_length:
             raise ValueError("Sequence length must divide into complete segments")
         total_loss = 0.0
+        use_ttt = getattr(
+            getattr(self.cfg.actor.model, "rl_head_config", None), "use_ttt", False
+        )
+        memory = None
+        updates = []
         for start in range(0, length, segment_length):
             end = start + segment_length
             segment = segment_batch(batch, start, end, self.device)
+            if use_ttt:
+                segment["policy_noise_seed"] = sequence_policy_seeds(
+                    batch, start, end, self.cfg.actor.seed, self.device
+                )
             sync = is_last_micro_batch and end == length
             with self.before_micro_batch(self.model, sync):
                 with self.amp_context:
-                    output = self.model(forward_type=ForwardType.SFT, data=segment)
+                    kwargs = {"memory": memory} if use_ttt else {}
+                    output = self.model(
+                        forward_type=ForwardType.SFT, data=segment, **kwargs
+                    )
                 loss = output["loss"]
                 finite = torch.isfinite(loss.detach()).to(torch.int32)
                 if torch.distributed.is_initialized():
@@ -280,12 +335,17 @@ class FSDPGr00tSequenceSftWorker(FSDPVlaSftWorker):
                         "Non-finite sequence loss; optimizer not stepped"
                     )
                 self.grad_scaler.scale(loss * backward_scale).backward()
+            if use_ttt:
+                if output.get("memory") is None:
+                    raise RuntimeError("TTT forward must return its candidate memory")
+                memory = output["memory"].detach()
+                updates.append(float(output["ttt_update_rms"].detach()))
             total_loss += loss.detach().item()
         return {
             "loss": total_loss,
             "valid_anchors": batch["anchor_valid"].sum().item(),
             "sequence_samples": b,
-            "ttt_update_rms": 0.0,
+            "ttt_update_rms": sum(updates) / len(updates) if updates else 0.0,
         }
 
     def run_training(self) -> dict:
@@ -344,7 +404,8 @@ class FSDPGr00tSequenceSftWorker(FSDPVlaSftWorker):
                 "learning_rate": lr_used,
                 "next_learning_rate": self.optimizer.param_groups[0]["lr"],
                 "grad_norm": float(grad_norm),
-                "ttt_update_rms": 0.0,
+                "ttt_update_rms": sum(x["ttt_update_rms"] for x in values)
+                / microbatches,
             }
             if budget is not None:
                 metrics["budget_windows"] = budget

@@ -35,6 +35,10 @@ mp.set_start_method("spawn", force=True)
     config_name="libero_spatial_starvla_eval",
 )
 def main(cfg) -> None:
+    if cfg.rollout.get("native_gr00t_eval", False):
+        from evaluations.gr00t_native_policy import validate_eval_paths
+
+        validate_eval_paths(cfg, require_fresh=True)
     cfg.runner.task_type = "embodied_eval"
     cfg = validate_cfg(cfg)
     print(json.dumps(OmegaConf.to_container(cfg, resolve=True), indent=2))
@@ -70,7 +74,15 @@ def main(cfg) -> None:
             )
         )
     elif rollout_backend == "huggingface":
-        if cfg.runner.get("rtc", {}).get("enabled", False):
+        if cfg.rollout.get("native_gr00t_eval", False):
+            from evaluations.gr00t_native_worker import (
+                NativeEvalEnvWorker,
+                NativeEvalRolloutWorker,
+            )
+
+            env_worker_cls = NativeEvalEnvWorker
+            rollout_worker_cls = NativeEvalRolloutWorker
+        elif cfg.runner.get("rtc", {}).get("enabled", False):
             from rlinf.workers.env.rtc_env_worker import RTCEnvWorker
             from rlinf.workers.rollout.hf.rtc_huggingface_worker import (
                 RTCMultiStepRolloutWorker,

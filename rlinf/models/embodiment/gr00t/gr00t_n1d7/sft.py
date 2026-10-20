@@ -34,12 +34,18 @@ def sequence_loss(
     return (masked.sum(1) / denominator.float()).mean()
 
 
-def native_sequence_forward(model, forward_type, data: dict) -> dict:
+def native_sequence_forward(model, forward_type, data: dict, memory=None) -> dict:
     """Route only SFT through the native training head, without RL replay."""
     from rlinf.models.embodiment.base_policy import ForwardType
 
     if forward_type != ForwardType.SFT:
         raise ValueError("This adapter accepts only ForwardType.SFT")
+    if getattr(model, "_native_ttt_installed", False):
+        from .native_ttt import native_ttt_sequence_forward
+
+        return native_ttt_sequence_forward(model, data, memory)
+    if memory is not None:
+        raise ValueError("The native baseline does not accept recurrent memory")
     backbone_inputs, action_inputs = model.prepare_input(data)
     output = model.action_head(model.backbone(backbone_inputs), action_inputs)
     loss = sequence_loss(
@@ -80,8 +86,6 @@ def build_model(cfg, torch_dtype=torch.float32):
 
     if torch_dtype != torch.float32:
         raise ValueError("Native sequence SFT requires FP32 master parameters")
-    if cfg.rl_head_config.use_ttt or cfg.rl_head_config.ttt.num_register_tokens != 0:
-        raise ValueError("Native baseline requires use_ttt=false and zero registers")
     dependency = Path(gr00t.__file__).resolve().parent.parent
     if dependency != Path(cfg.dependency_path).resolve():
         raise ValueError(
@@ -99,8 +103,15 @@ def build_model(cfg, torch_dtype=torch.float32):
     class NativeSequencePolicy(Gr00tN1d7):
         _no_split_modules = sequence_no_split_modules(cfg.gradient_checkpointing)
 
-        def forward(self, forward_type=ForwardType.SFT, data=None, **kwargs):
-            return native_sequence_forward(self, forward_type, data)
+        def forward(
+            self, forward_type=ForwardType.SFT, data=None, memory=None, **kwargs
+        ):
+            return native_sequence_forward(self, forward_type, data, memory)
+
+        def predict_with_memory(self, data, memory=None, **kwargs):
+            from .native_ttt import native_ttt_predict
+
+            return native_ttt_predict(self, data, memory, **kwargs)
 
     root = Path(cfg.model_path)
     config = Gr00tN1d7Config.from_pretrained(root, local_files_only=True)
@@ -125,6 +136,12 @@ def build_model(cfg, torch_dtype=torch.float32):
     model.load_state_dict(weights, strict=True)
     del weights
     model.float()
+    if cfg.rl_head_config.use_ttt or cfg.rl_head_config.ttt.num_register_tokens:
+        from .native_ttt import configure_native_ttt
+
+        # New CPU parameter initialization must not consume native training RNG.
+        with torch.random.fork_rng(devices=[]):
+            configure_native_ttt(model, cfg)
     if cfg.rl_head_config.disable_dropout:
         for module in model.modules():
             if isinstance(module, torch.nn.Dropout):
@@ -132,6 +149,7 @@ def build_model(cfg, torch_dtype=torch.float32):
     if cfg.gradient_checkpointing:
         from functools import partial
 
+        from gr00t.model.modules.dit import BasicTransformerBlock
         from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
             CheckpointImpl,
             apply_activation_checkpointing,
@@ -146,7 +164,7 @@ def build_model(cfg, torch_dtype=torch.float32):
             checkpoint_wrapper_fn=partial(
                 checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT
             ),
-            check_fn=lambda module: type(module).__name__ == "BasicTransformerBlock",
+            check_fn=lambda module: isinstance(module, BasicTransformerBlock),
         )
     if any(p.dtype != torch.float32 for p in model.parameters()):
         raise TypeError("Native sequence SFT master parameters must all be FP32")

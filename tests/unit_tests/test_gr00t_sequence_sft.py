@@ -7,19 +7,227 @@ import pytest
 import torch
 
 
-def test_full_microbatches_cross_epoch_without_dropping_episodes():
+def test_native_ttt_dispatch_carries_memory_but_baseline_uses_native_head():
+    from types import SimpleNamespace
+
+    from rlinf.models.embodiment.base_policy import ForwardType
+    from rlinf.models.embodiment.gr00t.gr00t_n1d7.sft import native_sequence_forward
+
+    class NativeHead(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor(2.0))
+
+        def forward(self, backbone, action):
+            return {
+                "action_loss": (self.weight * action).square(),
+                "action_mask": torch.ones_like(action),
+            }
+
+    head = NativeHead()
+    model = SimpleNamespace(
+        prepare_input=lambda d: (d["x"], d["action"]),
+        backbone=torch.nn.Identity(),
+        action_head=head,
+    )
+    data = {
+        "x": torch.ones(1, 1),
+        "action": torch.tensor([[[3.0]]]),
+        "anchor_valid": torch.ones(1, 1, dtype=torch.bool),
+        "supervision": torch.ones(1, 1, dtype=torch.bool),
+        "denominator": torch.ones(1),
+    }
+    result = native_sequence_forward(model, ForwardType.SFT, data, memory=None)
+    assert result["loss"].item() == 36.0
+    result["loss"].backward()
+    assert head.weight.grad.item() == 36.0
+
+
+def test_policy_noise_seeds_are_identity_based_and_do_not_advance_rng():
+    import numpy as np
+
+    from rlinf.workers.sft.fsdp_gr00t_sequence_sft_worker import sequence_policy_seeds
+
+    batch = {
+        "anchor_valid": torch.tensor([[True, True, False], [True, True, True]]),
+        "descriptions": [
+            {"epoch": 2, "episode": 7, "anchors": [0, 8]},
+            {"epoch": 3, "episode": 9, "anchors": [4, 12, 20]},
+        ],
+    }
+    state = torch.random.get_rng_state().clone()
+    seeds = sequence_policy_seeds(batch, 0, 3, 42, torch.device("cpu"))
+    assert seeds.shape == (2, 3)
+    assert seeds.dtype == torch.int64
+    assert seeds[0, 2].item() == 0
+    assert torch.equal(torch.random.get_rng_state(), state)
+    assert torch.equal(
+        seeds[:, 1:], sequence_policy_seeds(batch, 1, 3, 42, torch.device("cpu"))
+    )
+    changed = {**batch, "descriptions": [dict(x) for x in batch["descriptions"]]}
+    changed["descriptions"][0]["epoch"] = 4
+    other = sequence_policy_seeds(changed, 0, 3, 42, torch.device("cpu"))
+    assert not torch.equal(seeds[0, :2], other[0, :2])
+    assert torch.equal(seeds[1], other[1])
+    # Independent SeedSequence construction must leave NumPy's global stream alone.
+    np.random.seed(13)
+    first = np.random.random()
+    sequence_policy_seeds(batch, 0, 3, 42, torch.device("cpu"))
+    second = np.random.random()
+    np.random.seed(13)
+    assert (first, second) == (np.random.random(), np.random.random())
+
+
+def test_ttt_worker_detaches_after_backward_and_resets_each_sequence():
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+    from typing import NamedTuple
+
+    from rlinf.workers.sft.fsdp_gr00t_sequence_sft_worker import (
+        FSDPGr00tSequenceSftWorker,
+    )
+
+    class State(NamedTuple):
+        value: torch.Tensor
+
+        def detach(self):
+            return State(self.value.detach())
+
+    class Policy(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = torch.nn.Parameter(torch.tensor(2.0))
+            self.history = []
+
+        def forward(self, forward_type, data, memory=None):
+            self.history.append(None if memory is None else memory.value.item())
+            if memory is not None:
+                assert memory.value.grad_fn is None
+            assert data["policy_noise_seed"].shape == (1, 2)
+            history = 0.0 if memory is None else memory.value
+            value = self.weight + history
+            return {
+                "loss": value.square(),
+                "memory": State(value),
+                "ttt_update_rms": self.weight.detach(),
+            }
+
+    model = Policy()
+    worker = SimpleNamespace(
+        model=model,
+        device=torch.device("cpu"),
+        gradient_accumulation=1,
+        amp_context=nullcontext(),
+        before_micro_batch=lambda model, sync: nullcontext(),
+        grad_scaler=torch.amp.GradScaler("cpu", enabled=False),
+        cfg=SimpleNamespace(
+            actor=SimpleNamespace(
+                micro_batch_size=1,
+                seed=42,
+                model=SimpleNamespace(
+                    tbptt_segment_length=2, rl_head_config=SimpleNamespace(use_ttt=True)
+                ),
+            )
+        ),
+    )
+    batch = {
+        "action": torch.zeros(4, 1, 1),
+        "anchor_valid": torch.ones(1, 4, dtype=torch.bool),
+        "supervision": torch.ones(1, 4, dtype=torch.bool),
+        "denominator": torch.tensor([4.0]),
+        "descriptions": [{"epoch": 0, "episode": 0, "anchors": [0, 8, 16, 24]}],
+    }
+    for _ in range(2):
+        result = FSDPGr00tSequenceSftWorker.forward_backward_batch(worker, batch, True)
+    assert model.history == [None, 2.0, None, 2.0]
+    assert model.weight.grad.item() == 24.0
+    assert result["ttt_update_rms"] == 2.0
+
+
+def test_native_variant_configs_keep_the_control_protocol_and_protect_memory():
+    from pathlib import Path
+
+    from hydra import compose, initialize_config_dir
+    from omegaconf import OmegaConf
+
+    from rlinf.utils.fsdp_config import _parse_wrapper_config, build_mixed_precision
+
+    root = Path(__file__).resolve().parents[2] / "examples/sft/config"
+    variants = []
+    with initialize_config_dir(config_dir=str(root), version_base="1.1"):
+        for name in (
+            "robocasa_bowlandcup_gr00t_sequence128_aligned",
+            "robocasa_bowlandcup_robottt3",
+            "robocasa_bowlandcup_gr00t_sequence128_registers",
+        ):
+            variants.append(compose(config_name=name))
+    baseline, ttt, registers = variants
+    for cfg in variants:
+        assert cfg.cluster.component_placement.actor == "0-7"
+        assert cfg.actor.global_batch_size == 8
+        assert cfg.actor.micro_batch_size == 1
+        assert cfg.actor.global_batch_size // (8 * cfg.actor.micro_batch_size) == 1
+    for candidate in variants[1:]:
+        assert OmegaConf.to_container(candidate.data) == OmegaConf.to_container(
+            baseline.data
+        )
+        assert OmegaConf.to_container(candidate.actor.optim) == OmegaConf.to_container(
+            baseline.actor.optim
+        )
+        assert candidate.actor.global_batch_size == baseline.actor.global_batch_size
+    assert baseline.data.robottt.terminal_window_probability == 0.0
+    assert baseline.actor.optim.lr == 2.5e-5
+    assert baseline.actor.model.rl_head_config.ttt.num_register_tokens == 0
+    assert not registers.actor.model.rl_head_config.use_ttt
+    assert registers.actor.model.rl_head_config.ttt.num_register_tokens == 16
+    assert ttt.actor.model.training_memory_source == "predicted_final"
+    mp = build_mixed_precision(ttt.actor.fsdp_config.mixed_precision)
+    assert mp.param_dtype == torch.bfloat16
+    assert not mp.cast_root_forward_inputs and not mp.cast_forward_inputs
+    specs = _parse_wrapper_config(ttt.actor.fsdp_config)
+    assert len(specs) == 1
+    assert specs[0].targets == ("FastWeightTTT",)
+    assert specs[0].mixed_precision.param_dtype == torch.float32
+    assert specs[0].mixed_precision.reduce_dtype == torch.float32
+    assert not specs[0].mixed_precision.cast_forward_inputs
+    assert all(cfg.runner.logger.log_path is None for cfg in variants)
+
+
+def test_training_entry_requires_output_path_before_initializing_workers():
+    from omegaconf import OmegaConf
+
+    from examples.sft.train_vla_sft import require_explicit_log_path
+
+    for value in (None, "", "   "):
+        cfg = OmegaConf.create({"runner": {"logger": {"log_path": value}}})
+        with pytest.raises(ValueError, match="log_path"):
+            require_explicit_log_path(cfg)
+    cfg = OmegaConf.create({"runner": {"logger": {"log_path": "/chosen/output"}}})
+    require_explicit_log_path(cfg)
+    assert cfg.runner.logger.log_path == "/chosen/output"
+
+
+@pytest.mark.parametrize("world_size", [4, 8])
+def test_full_microbatches_cross_epoch_without_dropping_episodes(world_size):
     from rlinf.data.datasets.gr00t_n1d7.sequence_dataset import PackedEpisodeSampler
 
     ranks = [
-        list(itertools.islice(iter(PackedEpisodeSampler(104, 42, rank, 4)), 52))
-        for rank in range(4)
+        list(
+            itertools.islice(
+                iter(PackedEpisodeSampler(104, 42, rank, world_size)), 208 // world_size
+            )
+        )
+        for rank in range(world_size)
     ]
     for epoch in (0, 1):
         entries = [entry for rank in ranks for entry in rank if entry[0] == epoch]
         assert len(entries) == 104
         assert sorted(row for _, row in entries) == list(range(104))
-    assert sum(len(rank[:32]) for rank in ranks) == 128
-    assert [epoch for epoch, _ in ranks[0][16:32]] == [0] * 10 + [1] * 6
+    samples_per_rank = 128 // world_size
+    assert sum(len(rank[:samples_per_rank]) for rank in ranks) == 128
+    assert [epoch for epoch, _ in ranks[0][:samples_per_rank]] == [
+        index // (104 // world_size) for index in range(samples_per_rank)
+    ]
 
 
 def test_sampler_cursor_restores_across_epoch_boundary():

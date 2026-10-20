@@ -1,0 +1,24 @@
+# Native sequence128 control for RoboTTT 3.0. Set an agreed log_path explicitly.
+defaults:
+  - robocasa_bowlandcup_gr00t_sequence_sft
+  - _self_
+
+cluster:
+  component_placement:
+    actor: 0-7
+
+runner:
+  logger:
+    experiment_name: gr00t_sequence128_aligned
+    log_path: null
+
+data:
+  train_data_paths: /mnt/public/chenzm/robottt/h800_sft/assets/lerobot
+  robottt:
+    terminal_window_probability: 0.0
+
+actor:
+  model:
+    model_path: /mnt/public/chenzm/robottt/h800_sft/assets/GR00T-N1.7-3B
+    backbone_model_path: /mnt/public/chenzm/robottt/h800_sft/assets/Cosmos-Reason2-2B
+    dependency_path: /mnt/public/chenzm/robottt/h800_sft/code/Isaac-GR00T

@@ -28,10 +28,20 @@ from rlinf.workers.sft.fsdp_vla_sft_worker import FSDPVlaSftWorker
 mp.set_start_method("spawn", force=True)
 
 
+def require_explicit_log_path(cfg) -> None:
+    """Reject missing output locations before starting distributed workers."""
+    path = cfg.runner.logger.get("log_path")
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError(
+            "Set runner.logger.log_path to an explicitly chosen output directory"
+        )
+
+
 @hydra.main(
     version_base="1.1", config_path="config", config_name="maniskill_ppo_openvlaoft"
 )
 def main(cfg) -> None:
+    require_explicit_log_path(cfg)
     cfg = validate_cfg(cfg)
     logging.info(json.dumps(OmegaConf.to_container(cfg, resolve=True), indent=2))
 

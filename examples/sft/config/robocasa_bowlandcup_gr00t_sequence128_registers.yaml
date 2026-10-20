@@ -1,0 +1,15 @@
+# Structural control: native sequence128 plus registers, without fast weights.
+defaults:
+  - robocasa_bowlandcup_gr00t_sequence128_aligned
+  - _self_
+
+runner:
+  logger:
+    experiment_name: gr00t_sequence128_registers
+
+actor:
+  model:
+    rl_head_config:
+      use_ttt: false
+      ttt:
+        num_register_tokens: 16

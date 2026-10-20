@@ -1,0 +1,46 @@
+# Predicted-history TTT, with the sequence128 control's data and optimizer.
+defaults:
+  - robocasa_bowlandcup_gr00t_sequence128_aligned
+  - _self_
+
+runner:
+  save_interval: -1
+  save_steps: [3000, 5000, 6000, 8000, 9000, 10000]
+  logger:
+    experiment_name: robottt3
+
+actor:
+  model:
+    training_memory_source: predicted_final
+    rl_head_config:
+      use_ttt: true
+      ttt:
+        hidden_size: 1536
+        num_heads: 32
+        mlp_ratio: 4
+        num_register_tokens: 16
+        tokens_per_anchor: 57
+        base_lr: 0.1
+        gate_init: 0.001
+        o_proj_std: 0.02
+        rope_theta: 10000.0
+        position_mode: flattened
+        compile_inner: true
+  fsdp_config:
+    mixed_precision:
+      # Native prepare_input handles observations; explicit memory must stay FP32.
+      cast_forward_inputs: false
+      cast_root_forward_inputs: false
+    wrappers:
+      ttt_fast_weights:
+        module_classes: [FastWeightTTT]
+        wrap_mode: subtree
+    mixed_precision_policies:
+      ttt_fp32:
+        param_dtype: fp32
+        reduce_dtype: fp32
+        buffer_dtype: fp32
+        cast_forward_inputs: false
+        cast_root_forward_inputs: false
+    mixed_precision_rules:
+      ttt_fast_weights: ttt_fp32
